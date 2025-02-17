@@ -56,7 +56,7 @@ def to_pil(im):
 def tile_images_grid8(images: List, cell_size: int) -> Image.Image:
     if len(images) != 8:
         raise Exception("Expected 8 images, got " + str(len(images)))
-    pil_images = [to_pil(im).resize((cell_size, cell_size), Image.ANTIALIAS) for im in images]
+    pil_images = [to_pil(im).resize((cell_size, cell_size), Image.Resampling.LANCZOS) for im in images]
     blank = Image.new("RGB", (cell_size, cell_size), (255, 255, 255))
     grid = Image.new("RGB", (3 * cell_size, 3 * cell_size))
     # Top row.
