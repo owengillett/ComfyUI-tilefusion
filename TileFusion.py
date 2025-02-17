@@ -52,10 +52,11 @@ def to_pil(im):
     else:
         raise Exception("Unsupported image format: " + str(type(im)))
 
-# Helper: Tile 8 images into a 3x3 grid with the center blank.
+# Helper: Tile 8 images into a 3x3 grid with a blank (white) center.
 def tile_images_grid8(images: List, cell_size: int) -> Image.Image:
     if len(images) != 8:
         raise Exception("Expected 8 images, got " + str(len(images)))
+    # Resize each image to (cell_size, cell_size) using LANCZOS resampling.
     pil_images = [to_pil(im).resize((cell_size, cell_size), Image.Resampling.LANCZOS) for im in images]
     blank = Image.new("RGB", (cell_size, cell_size), (255, 255, 255))
     grid = Image.new("RGB", (3 * cell_size, 3 * cell_size))
@@ -74,7 +75,7 @@ def tile_images_grid8(images: List, cell_size: int) -> Image.Image:
     return grid
 
 # Helper: Create a mask grid for 8 cells.
-# For each cell, if the corresponding input is provided, mask = black (0); if not, white (255).
+# For each cell, if the input was provided then mask = black (0); else white (255).
 def tile_mask_grid8(provided: List[bool], cell_size: int) -> Image.Image:
     black_cell = Image.new("L", (cell_size, cell_size), 0)
     white_cell = Image.new("L", (cell_size, cell_size), 255)
@@ -92,7 +93,7 @@ def tile_mask_grid8(provided: List[bool], cell_size: int) -> Image.Image:
     grid.paste(cells[7], (2 * cell_size, 2 * cell_size))
     return grid
 
-# Helper: Safely get the length of a sequence (list or torch.Tensor)
+# Helper: Safely get the length of a sequence (list or torch.Tensor).
 def seq_length(seq):
     if seq is None:
         return 0
@@ -123,7 +124,7 @@ class VideoGridCombine:
             }
         }
 
-    # We now return two outputs (combined sequence and mask) plus tiling.
+    # Return two outputs: combined image sequence and mask sequence; plus tiling as string.
     RETURN_TYPES = ("IMAGE", "IMAGE", "STRING")
     RETURN_NAMES = ("combined_sequence", "mask_sequence", "tiling")
     CATEGORY = "custom"
@@ -142,7 +143,7 @@ class VideoGridCombine:
         bottom_middle=None,
         bottom_right=None,
     ):
-        # Dictionary of optional sequences.
+        # Create dictionary of input sequences.
         seqs = {
             "top_left": top_left,
             "top_middle": top_middle,
@@ -153,27 +154,28 @@ class VideoGridCombine:
             "bottom_middle": bottom_middle,
             "bottom_right": bottom_right,
         }
-        # Determine the minimum frame count among provided sequences.
+        # Ensure that if any optional input is None, it's replaced with an empty list.
+        for key in seqs:
+            if seqs[key] is None:
+                seqs[key] = []
+        # Determine minimum frame count among sequences that are non-empty.
         provided_counts = [seq_length(seq) for seq in seqs.values() if seq_length(seq) > 0]
         if provided_counts:
             min_frames = min(provided_counts)
         else:
-            # If no inputs are provided, return empty outputs.
             return (torch.tensor([]), torch.tensor([]), tiling)
-        # For each sequence, if missing/empty, substitute with a white image sequence of length min_frames.
+        # For each sequence, if it's empty, substitute a white image sequence.
         for key, seq in seqs.items():
             if seq_length(seq) == 0:
                 white = Image.new("RGB", (cell_size, cell_size), (255, 255, 255))
                 seqs[key] = [np.array(white).astype(np.float32)/255.0 for _ in range(min_frames)]
             else:
-                # If sequence is provided as a list, truncate to min_frames.
-                if not isinstance(seqs[key], torch.Tensor):
+                # Truncate to min_frames.
+                if not isinstance(seq, torch.Tensor):
                     seqs[key] = seq[:min_frames]
-                # If it's a tensor, assume the first dimension is frames.
                 else:
                     seqs[key] = seq[:min_frames]
-        # Create provided flags for mask generation.
-        # For each key, a flag is True if originally provided non-empty.
+        # Create provided flags for mask creation.
         provided_flags = []
         for key in ["top_left", "top_middle", "top_right",
                     "middle_left", "middle_right",
@@ -184,10 +186,9 @@ class VideoGridCombine:
         pbar = ProgressBar(min_frames)
         for i in range(min_frames):
             try:
-                # Retrieve the i-th frame for each cell.
                 frames = [seqs[key][i] for key in ["top_left", "top_middle", "top_right",
-                                                   "middle_left", "middle_right",
-                                                   "bottom_left", "bottom_middle", "bottom_right"]]
+                                                    "middle_left", "middle_right",
+                                                    "bottom_left", "bottom_middle", "bottom_right"]]
             except Exception as e:
                 raise Exception(f"Error retrieving frame {i}: " + str(e))
             try:
@@ -196,4 +197,10 @@ class VideoGridCombine:
                 raise Exception(f"Error tiling frame {i}: " + str(e))
             grid_np = np.array(grid_img).astype(np.float32) / 255.0
             combined_frames.append(grid_np)
-            # Create mask for this f
+            mask_img = tile_mask_grid8(provided_flags, cell_size)
+            mask_np = np.array(mask_img).astype(np.float32) / 255.0
+            mask_frames.append(mask_np)
+            pbar.update(1)
+        combined_tensor = torch.from_numpy(np.stack(combined_frames))
+        mask_tensor = torch.from_numpy(np.stack(mask_frames))
+        return (combined_tensor, mask_tensor, tiling)
