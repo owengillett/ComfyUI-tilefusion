@@ -24,7 +24,6 @@ class MultiInput(str):
             return False
         return other not in self.allowed_types
 
-# Types for the node interface
 imageOrLatent = MultiInput("IMAGE", ["IMAGE", "LATENT"])
 floatOrInt = MultiInput("FLOAT", ["FLOAT", "INT"])
 
@@ -40,10 +39,8 @@ def to_pil(im):
         return Image.fromarray(im).convert("RGB")
     elif isinstance(im, torch.Tensor):
         im = im.cpu().detach()
-        # If tensor has a batch dimension, select the first image.
         if im.ndim == 4:
             im = im[0]
-        # If tensor is in CHW format (channels first), convert to HWC
         if im.ndim == 3 and im.shape[0] <= 4:
             im = im.permute(1, 2, 0)
         im = im.numpy()
@@ -71,7 +68,6 @@ def tile_images(images: List) -> Image.Image:
 class VideoGridCombine:
     @classmethod
     def INPUT_TYPES(cls):
-        # Each required input is an image sequence (list) with type imageOrLatent.
         return {
             "required": {
                 "seq1": (imageOrLatent,),
@@ -86,36 +82,37 @@ class VideoGridCombine:
             }
         }
 
-    # Return type "IMAGE" is used to denote an image sequence.
+    # Returning type "IMAGE" indicates an image sequence.
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("combined_sequence",)
     CATEGORY = "custom"
     FUNCTION = "combine_grid"
 
     def combine_grid(self, seq1, seq2, seq3, seq4, seq5, seq6, seq7, seq8, seq9):
-        # Gather the nine input sequences.
+        # Collect nine input sequences.
         sequences = [seq1, seq2, seq3, seq4, seq5, seq6, seq7, seq8, seq9]
         try:
             min_frames = min(len(seq) for seq in sequences)
         except Exception as e:
             raise Exception("One or more inputs are not valid image sequences: " + str(e))
         if min_frames == 0:
-            return ([],)
-        combined_sequence = []
+            return (torch.tensor([]),)
+        combined_frames = []
         pbar = ProgressBar(min_frames)
-        # Process each frame index.
+        # Process frame-by-frame.
         for i in range(min_frames):
             try:
-                # Get the i-th frame from each sequence.
                 frames = [sequences[j][i] for j in range(9)]
             except Exception as e:
-                raise Exception(f"Error retrieving frame {i} from input sequences: " + str(e))
+                raise Exception(f"Error retrieving frame {i}: " + str(e))
             try:
                 grid_frame = tile_images(frames)
             except Exception as e:
                 raise Exception(f"Error tiling frame {i}: " + str(e))
             # Convert the grid frame to a normalized numpy array.
             grid_np = np.array(grid_frame).astype(np.float32) / 255.0
-            combined_sequence.append(grid_np)
+            combined_frames.append(grid_np)
             pbar.update(1)
-        return (combined_sequence,)
+        # Stack the frames into a single tensor.
+        combined_tensor = torch.from_numpy(np.stack(combined_frames))
+        return (combined_tensor,)
