@@ -8,8 +8,7 @@ from torch.nn import Conv2d
 from torch.nn import functional as F
 from torch.nn.modules.utils import _pair
 
-
-class SeamlessTile:
+class TileFusion:
     @classmethod
     def INPUT_TYPES(s):
         return {
