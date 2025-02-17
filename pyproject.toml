@@ -1,0 +1,13 @@
+[project]
+name = "comfyui-tilefusion"
+description = "Helper nodes for generating seamless tiles."
+version = "1.0.0"
+license = { file = "LICENSE" }
+
+[project.urls]
+Repository = "https://github.com/owengillett/ComfyUI-tilefusion"
+
+[tool.comfy]
+PublisherId = "owengillett"
+DisplayName = "ComfyUI-tilefusion"
+Icon = ""
