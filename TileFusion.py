@@ -115,17 +115,17 @@ class VideoGridCombine:
         bottom_middle=None,
         bottom_right=None,
     ):
-       positions = [
+        neighbors = [
             "top_left", "top_middle", "top_right",
             "middle_left", "middle_right",
             "bottom_left", "bottom_middle", "bottom_right"
         ]
 
         # Build original flags using explicit checks.
-        orig = {pos: bool(seq) and seq_length(seq) > 0 for pos in positions if (seq := locals().get(pos)) is not None}
+        orig = {pos: bool(seq) and seq_length(seq) > 0 for pos in neighbors if (seq := locals().get(pos)) is not None}
 
         # Build dictionary for optional inputs, replacing None with empty lists.
-        seqs = {pos: seq or [] for pos in positions if (seq := locals().get(pos)) is not None}
+        seqs = {pos: seq or [] for pos in neighbors if (seq := locals().get(pos)) is not None}
 
         seq_lengths = [seq_length(seq) for seq in seqs.values() if seq_length(seq) > 0]
 
@@ -176,7 +176,8 @@ class VideoGridCombine:
         for i in range(min_frames):
             # For each frame, build a dict mapping each cell to its i-th frame.
             frame_data = {}
-            for pos in positions:
+            for pos in neighbors
+:
                 frame_data[pos] = seqs[pos][i] if seq_length(seqs[pos]) > 0 else None
             # Build grid row-by-row.
             row_imgs = []
