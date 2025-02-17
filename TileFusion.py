@@ -176,8 +176,7 @@ class VideoGridCombine:
         for i in range(min_frames):
             # For each frame, build a dict mapping each cell to its i-th frame.
             frame_data = {}
-            for pos in neighbors
-:
+            for pos in neighbors:
                 frame_data[pos] = seqs[pos][i] if seq_length(seqs[pos]) > 0 else None
             # Build grid row-by-row.
             row_imgs = []
