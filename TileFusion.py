@@ -27,7 +27,7 @@ class MultiInput(str):
 imageOrLatent = MultiInput("IMAGE", ["IMAGE", "LATENT"])
 floatOrInt = MultiInput("FLOAT", ["FLOAT", "INT"])
 
-# Helper: Convert input (PIL Image, numpy array, or torch.Tensor) to a PIL Image.
+# Helper: Convert an input (PIL Image, numpy array, or torch.Tensor) to a PIL Image.
 def to_pil(im):
     if isinstance(im, Image.Image):
         return im.convert("RGB")
@@ -71,7 +71,7 @@ def tile_images_grid8(images: List, cell_size: int) -> Image.Image:
     return grid
 
 # Helper: Create a mask grid for 8 cells.
-# For each cell, if originally provided then mask = black (0); else white (255).
+# For each cell, if originally provided then mask = black (0); otherwise white (255).
 def tile_mask_grid8(provided: List[bool], cell_size: int) -> Image.Image:
     black_cell = Image.new("L", (cell_size, cell_size), 0)
     white_cell = Image.new("L", (cell_size, cell_size), 255)
@@ -100,7 +100,7 @@ def central_crop(img: Image.Image, crop_max_size: float) -> Image.Image:
     top = (h - new_h) // 2
     return img.crop((left, top, left + new_w, top + new_h))
 
-# Helper: Safely get length of a sequence (list or torch.Tensor).
+# Helper: Safely get the length of a sequence (list or torch.Tensor).
 def seq_length(seq):
     if seq is None:
         return 0
@@ -110,6 +110,14 @@ def seq_length(seq):
         return len(seq)
     except Exception:
         return 0
+
+# Helper: Pad a sequence (list) to desired length by repeating its last element.
+def pad_sequence(seq, target_length):
+    current = seq_length(seq)
+    if current >= target_length:
+        return seq
+    last = seq[-1]
+    return seq + [last] * (target_length - current)
 
 class VideoGridCombine:
     @classmethod
@@ -132,7 +140,7 @@ class VideoGridCombine:
             }
         }
 
-    # Return types: combined image sequence ("IMAGE"), mask sequence ("MASK"), tiling string.
+    # Return types: combined image sequence ("IMAGE"), mask sequence ("MASK"), and tiling string.
     RETURN_TYPES = ("IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("combined_sequence", "mask_sequence", "tiling")
     CATEGORY = "custom"
@@ -152,7 +160,7 @@ class VideoGridCombine:
         bottom_middle=None,
         bottom_right=None,
     ):
-        # If no inputs are provided at all, create a white output.
+        # If no images are provided at all, output a single white frame.
         if (seq_length(top_left) == 0 and seq_length(top_middle) == 0 and seq_length(top_right) == 0 and
             seq_length(middle_left) == 0 and seq_length(middle_right) == 0 and
             seq_length(bottom_left) == 0 and seq_length(bottom_middle) == 0 and seq_length(bottom_right) == 0):
@@ -173,7 +181,7 @@ class VideoGridCombine:
             "bottom_middle": True if (bottom_middle is not None and seq_length(bottom_middle) > 0) else False,
             "bottom_right": True if (bottom_right is not None and seq_length(bottom_right) > 0) else False,
         }
-        # Build dictionary for optional inputs, replacing None with empty lists.
+        # Build dictionary for optional inputs.
         seqs = {
             "top_left": top_left if top_left is not None else [],
             "top_middle": top_middle if top_middle is not None else [],
@@ -184,22 +192,24 @@ class VideoGridCombine:
             "bottom_middle": bottom_middle if bottom_middle is not None else [],
             "bottom_right": bottom_right if bottom_right is not None else [],
         }
-        # Update orig: if a sequence is empty, mark it as not provided.
+        # Determine maximum frame count among all cells.
+        all_lengths = [seq_length(seq) for seq in seqs.values()]
+        max_frames = max(all_lengths) if all_lengths else 1
+        # For cells that are empty, substitute with a white sequence of length max_frames.
+        # For cells that are provided but are shorter than max_frames, pad them by repeating the last frame.
+        for key, seq in seqs.items():
+            L = seq_length(seq)
+            if L == 0:
+                white = Image.new("RGB", (cell_size, cell_size), (255, 255, 255))
+                seqs[key] = [np.array(white).astype(np.float32)/255.0 for _ in range(max_frames)]
+            elif L < max_frames:
+                seqs[key] = pad_sequence(seq, max_frames)
+            else:
+                seqs[key] = seq[:max_frames]
+        # Update orig flags: if a cell was not originally provided, force flag to False.
         for key in seqs:
             if seq_length(seqs[key]) == 0:
                 orig[key] = False
-        provided_counts = [seq_length(seq) for seq in seqs.values() if seq_length(seq) > 0]
-        min_frames = min(provided_counts) if provided_counts else 1
-        # For each cell, if empty, substitute with a white image sequence.
-        for key, seq in seqs.items():
-            if seq_length(seq) == 0:
-                white = Image.new("RGB", (cell_size, cell_size), (255, 255, 255))
-                seqs[key] = [np.array(white).astype(np.float32)/255.0 for _ in range(min_frames)]
-            else:
-                if not isinstance(seq, torch.Tensor):
-                    seqs[key] = seq[:min_frames]
-                else:
-                    seqs[key] = seq[:min_frames]
         # Build dynamic grid structure.
         include_top = orig["top_left"] or orig["top_middle"] or orig["top_right"]
         include_bottom = orig["bottom_left"] or orig["bottom_middle"] or orig["bottom_right"]
@@ -230,14 +240,14 @@ class VideoGridCombine:
 
         combined_frames = []
         mask_frames = []
-        pbar = ProgressBar(min_frames)
-        for i in range(min_frames):
-            # For each frame, build a dict mapping positions to the i-th frame.
+        pbar = ProgressBar(max_frames)
+        for i in range(max_frames):
+            # Build a dict mapping each position to the i-th frame.
             frame_data = {}
             for pos in ["top_left", "top_middle", "top_right",
                         "middle_left", "middle_right",
                         "bottom_left", "bottom_middle", "bottom_right"]:
-                frame_data[pos] = seqs[pos][i] if seq_length(seqs[pos]) > 0 else None
+                frame_data[pos] = seqs[pos][i]  # All cells now have a frame.
             # Build grid row-by-row.
             row_imgs = []
             row_masks = []
@@ -249,7 +259,7 @@ class VideoGridCombine:
                         cell_imgs.append(Image.new("RGB", (cell_size, cell_size), (255,255,255)))
                         cell_masks.append(Image.new("L", (cell_size, cell_size), 255))
                     else:
-                        # Use orig flag to decide mask.
+                        # Use orig flag to decide: if originally provided, use the cell; else, white.
                         if orig.get(pos, False):
                             cell_img = to_pil(frame_data[pos]).resize((cell_size, cell_size), Image.Resampling.LANCZOS)
                             cell_imgs.append(cell_img)
@@ -320,3 +330,11 @@ def central_crop(img: Image.Image, crop_max_size: float) -> Image.Image:
     left = (w - new_w) // 2
     top = (h - new_h) // 2
     return img.crop((left, top, left + new_w, top + new_h))
+
+# Helper: Pad a sequence to target length by repeating its last element.
+def pad_sequence(seq, target_length):
+    current = seq_length(seq)
+    if current >= target_length:
+        return seq
+    last = seq[-1]
+    return seq + [last] * (target_length - current)
