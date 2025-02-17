@@ -59,23 +59,22 @@ def tile_images_grid8(images: List, cell_size: int) -> Image.Image:
     pil_images = [to_pil(im).resize((cell_size, cell_size), Image.Resampling.LANCZOS) for im in images]
     blank = Image.new("RGB", (cell_size, cell_size), (255, 255, 255))
     grid = Image.new("RGB", (3 * cell_size, 3 * cell_size))
-    # Top row.
     grid.paste(pil_images[0], (0, 0))
     grid.paste(pil_images[1], (cell_size, 0))
     grid.paste(pil_images[2], (2 * cell_size, 0))
-    # Middle row.
     grid.paste(pil_images[3], (0, cell_size))
     grid.paste(blank, (cell_size, cell_size))
     grid.paste(pil_images[4], (2 * cell_size, cell_size))
-    # Bottom row.
     grid.paste(pil_images[5], (0, 2 * cell_size))
     grid.paste(pil_images[6], (cell_size, 2 * cell_size))
     grid.paste(pil_images[7], (2 * cell_size, 2 * cell_size))
     return grid
 
 # Helper: Create a mask grid for 8 cells.
-# For each cell, if the input was provided then mask = black (0); else white (255).
+# For each cell, if the cell was originally supplied then the mask cell is black (0);
+# otherwise white (255). The center cell is always white.
 def tile_mask_grid8(provided: List[bool], cell_size: int) -> Image.Image:
+    # Create black and white cells.
     black_cell = Image.new("L", (cell_size, cell_size), 0)
     white_cell = Image.new("L", (cell_size, cell_size), 255)
     cells = [black_cell if flag else white_cell for flag in provided]
@@ -92,7 +91,7 @@ def tile_mask_grid8(provided: List[bool], cell_size: int) -> Image.Image:
     grid.paste(cells[7], (2 * cell_size, 2 * cell_size))
     return grid
 
-# Helper: Centrally crop an image if larger than crop_max_size.
+# Helper: Centrally crop an image if its dimensions exceed crop_max_size.
 def central_crop(img: Image.Image, crop_max_size: float) -> Image.Image:
     if crop_max_size <= 0:
         return img
@@ -135,7 +134,7 @@ class VideoGridCombine:
             }
         }
 
-    # Outputs: combined image sequence, mask sequence, and tiling.
+    # Outputs: combined image sequence, mask sequence, and tiling string.
     RETURN_TYPES = ("IMAGE", "IMAGE", "STRING")
     RETURN_NAMES = ("combined_sequence", "mask_sequence", "tiling")
     CATEGORY = "custom"
@@ -166,7 +165,7 @@ class VideoGridCombine:
             "bottom_middle": True if (bottom_middle is not None and seq_length(bottom_middle) > 0) else False,
             "bottom_right": True if (bottom_right is not None and seq_length(bottom_right) > 0) else False,
         }
-        # Dictionary for optional inputs, replacing None with empty lists.
+        # Build dictionary for optional inputs, replacing None with empty lists.
         seqs = {
             "top_left": top_left if top_left is not None else [],
             "top_middle": top_middle if top_middle is not None else [],
@@ -182,7 +181,7 @@ class VideoGridCombine:
             min_frames = min(provided_counts)
         else:
             return (torch.tensor([]), torch.tensor([]), tiling)
-        # Substitute empty sequences with a white image sequence.
+        # For each cell, if empty, substitute with a white image sequence.
         for key, seq in seqs.items():
             if seq_length(seq) == 0:
                 white = Image.new("RGB", (cell_size, cell_size), (255, 255, 255))
@@ -192,7 +191,7 @@ class VideoGridCombine:
                     seqs[key] = seq[:min_frames]
                 else:
                     seqs[key] = seq[:min_frames]
-        # Build grid dynamically.
+        # Build dynamic grid structure.
         include_top = orig["top_left"] or orig["top_middle"] or orig["top_right"]
         include_bottom = orig["bottom_left"] or orig["bottom_middle"] or orig["bottom_right"]
         include_left = orig["top_left"] or orig["middle_left"] or orig["bottom_left"]
@@ -224,13 +223,13 @@ class VideoGridCombine:
         mask_frames = []
         pbar = ProgressBar(min_frames)
         for i in range(min_frames):
-            # Build a dictionary mapping positions to the i-th frame.
+            # For each frame, create a dictionary mapping each position to its i-th frame.
             frame_data = {}
             for pos in ["top_left", "top_middle", "top_right",
                         "middle_left", "middle_right",
                         "bottom_left", "bottom_middle", "bottom_right"]:
                 frame_data[pos] = seqs[pos][i] if seq_length(seqs[pos]) > 0 else None
-            # For grid assembly, build grid row-by-row.
+            # Build grid row-by-row.
             row_imgs = []
             row_masks = []
             for row in final_rows:
@@ -238,30 +237,31 @@ class VideoGridCombine:
                 cell_masks = []
                 for pos in row:
                     if pos == "center":
-                        cell_imgs.append(Image.new("RGB", (cell_size, cell_size), (255,255,255)))
+                        cell_imgs.append(Image.new("RGB", (cell_size, cell_size), (255, 255, 255)))
                         cell_masks.append(Image.new("L", (cell_size, cell_size), 255))
                     else:
-                        if frame_data.get(pos) is not None:
+                        # Use the original flag to determine if this cell was provided.
+                        if orig.get(pos, False):
                             cell_img = to_pil(frame_data[pos]).resize((cell_size, cell_size), Image.Resampling.LANCZOS)
                             cell_imgs.append(cell_img)
                             cell_masks.append(Image.new("L", (cell_size, cell_size), 0))
                         else:
-                            cell_imgs.append(Image.new("RGB", (cell_size, cell_size), (255,255,255)))
+                            cell_imgs.append(Image.new("RGB", (cell_size, cell_size), (255, 255, 255)))
                             cell_masks.append(Image.new("L", (cell_size, cell_size), 255))
-                row_img = Image.new("RGB", (len(cell_imgs)*cell_size, cell_size))
-                row_mask = Image.new("L", (len(cell_masks)*cell_size, cell_size), 255)
+                row_img = Image.new("RGB", (len(cell_imgs) * cell_size, cell_size))
+                row_mask = Image.new("L", (len(cell_masks) * cell_size, cell_size), 255)
                 for idx, im in enumerate(cell_imgs):
-                    row_img.paste(im, (idx*cell_size, 0))
+                    row_img.paste(im, (idx * cell_size, 0))
                 for idx, im in enumerate(cell_masks):
-                    row_mask.paste(im, (idx*cell_size, 0))
+                    row_mask.paste(im, (idx * cell_size, 0))
                 row_imgs.append(row_img)
                 row_masks.append(row_mask)
-            grid_img = Image.new("RGB", (num_cols*cell_size, num_rows*cell_size))
-            grid_mask = Image.new("L", (num_cols*cell_size, num_rows*cell_size), 255)
+            grid_img = Image.new("RGB", (num_cols * cell_size, num_rows * cell_size))
+            grid_mask = Image.new("L", (num_cols * cell_size, num_rows * cell_size), 255)
             for idx, im in enumerate(row_imgs):
-                grid_img.paste(im, (0, idx*cell_size))
+                grid_img.paste(im, (0, idx * cell_size))
             for idx, im in enumerate(row_masks):
-                grid_mask.paste(im, (0, idx*cell_size))
+                grid_mask.paste(im, (0, idx * cell_size))
             if crop_max_size > 0:
                 grid_img = central_crop(grid_img, crop_max_size)
                 grid_mask = central_crop(grid_mask, crop_max_size)
