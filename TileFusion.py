@@ -24,11 +24,11 @@ class MultiInput(str):
             return False
         return other not in self.allowed_types
 
-# These types are used in the node interface.
+# Types for the node interface
 imageOrLatent = MultiInput("IMAGE", ["IMAGE", "LATENT"])
 floatOrInt = MultiInput("FLOAT", ["FLOAT", "INT"])
 
-# Helper: Convert input (PIL image or numpy array) to a PIL image
+# Helper: Convert an input (PIL image, numpy array, or torch.Tensor) to a PIL image.
 def to_pil(im):
     if isinstance(im, Image.Image):
         return im.convert("RGB")
@@ -38,10 +38,24 @@ def to_pil(im):
         else:
             im = im.astype(np.uint8)
         return Image.fromarray(im).convert("RGB")
+    elif isinstance(im, torch.Tensor):
+        im = im.cpu().detach()
+        # If tensor has a batch dimension, select the first image.
+        if im.ndim == 4:
+            im = im[0]
+        # If tensor is in CHW format (channels first), convert to HWC
+        if im.ndim == 3 and im.shape[0] <= 4:
+            im = im.permute(1, 2, 0)
+        im = im.numpy()
+        if im.max() <= 1.0:
+            im = (im * 255).astype(np.uint8)
+        else:
+            im = im.astype(np.uint8)
+        return Image.fromarray(im).convert("RGB")
     else:
         raise Exception("Unsupported image format: " + str(type(im)))
 
-# Helper: Tile a list of 9 images into a 3x3 grid
+# Helper: Tile a list of 9 images into a 3x3 grid.
 def tile_images(images: List) -> Image.Image:
     if len(images) != 9:
         raise Exception("Expected 9 images to form a 3x3 grid, got " + str(len(images)))
@@ -57,7 +71,7 @@ def tile_images(images: List) -> Image.Image:
 class VideoGridCombine:
     @classmethod
     def INPUT_TYPES(cls):
-        # Each input is an image sequence (list of images) of type imageOrLatent
+        # Each required input is an image sequence (list) with type imageOrLatent.
         return {
             "required": {
                 "seq1": (imageOrLatent,),
@@ -72,14 +86,14 @@ class VideoGridCombine:
             }
         }
 
-    # The return type is "IMAGE" – in our system this indicates an image sequence.
+    # Return type "IMAGE" is used to denote an image sequence.
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("combined_sequence",)
     CATEGORY = "custom"
     FUNCTION = "combine_grid"
 
     def combine_grid(self, seq1, seq2, seq3, seq4, seq5, seq6, seq7, seq8, seq9):
-        # Collect the nine input sequences.
+        # Gather the nine input sequences.
         sequences = [seq1, seq2, seq3, seq4, seq5, seq6, seq7, seq8, seq9]
         try:
             min_frames = min(len(seq) for seq in sequences)
@@ -89,10 +103,10 @@ class VideoGridCombine:
             return ([],)
         combined_sequence = []
         pbar = ProgressBar(min_frames)
-        # Process frame by frame up to the shortest sequence length.
+        # Process each frame index.
         for i in range(min_frames):
             try:
-                # Retrieve the i-th frame from each sequence.
+                # Get the i-th frame from each sequence.
                 frames = [sequences[j][i] for j in range(9)]
             except Exception as e:
                 raise Exception(f"Error retrieving frame {i} from input sequences: " + str(e))
@@ -100,7 +114,7 @@ class VideoGridCombine:
                 grid_frame = tile_images(frames)
             except Exception as e:
                 raise Exception(f"Error tiling frame {i}: " + str(e))
-            # Convert the grid image to a normalized numpy array.
+            # Convert the grid frame to a normalized numpy array.
             grid_np = np.array(grid_frame).astype(np.float32) / 255.0
             combined_sequence.append(grid_np)
             pbar.update(1)
