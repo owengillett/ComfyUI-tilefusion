@@ -1,218 +1,109 @@
+import os
+import subprocess
 import copy
 from typing import Optional
 
-import PIL
-import torch
-from torch import Tensor
-from torch.nn import Conv2d
-from torch.nn import functional as F
-from torch.nn.modules.utils import _pair
+# In this example we use folder_paths to determine output directories.
+# If you already have folder_paths in your ComfyUI environment, it will be used;
+# otherwise, we provide a fallback implementation.
+try:
+    import folder_paths
+except ImportError:
+    class folder_paths:
+        @staticmethod
+        def get_output_directory():
+            return os.getcwd()
+        @staticmethod
+        def get_temp_directory():
+            return os.getcwd()
 
-class RepeatVideo:
+class VideoGridCombine:
+    """
+    Custom node that accepts nine video inputs (each as a VHS_VIDEOINFO dictionary)
+    and arranges them in a 3x3 grid using ffmpeg’s filter_complex.
+
+    IMPORTANT:
+      - Each VHS_VIDEOINFO is expected to be a dict that includes either a "loaded_path"
+        or "source_path" key with the video file's path.
+      - All input videos should have the same resolution and framerate.
+      - ffmpeg must be installed and available in the system PATH.
+    """
     @classmethod
-    def INPUT_TYPES(s):
+    def INPUT_TYPES(cls):
         return {
             "required": {
-                "model": ("MODEL",),
-                "tiling": (["enable", "x_only", "y_only", "disable"],),
-                "copy_model": (["Make a copy", "Modify in place"],),
-            },
-        }
-
-    CATEGORY = "conditioning"
-
-    RETURN_TYPES = ("MODEL",)
-    FUNCTION = "run"
-
-    def run(self, model, copy_model, tiling):
-        if copy_model == "Modify in place":
-            model_copy = model
-        else:
-            model_copy = copy.deepcopy(model)
-            
-        if tiling == "enable":
-            make_circular_asymm(model_copy.model, True, True)
-        elif tiling == "x_only":
-            make_circular_asymm(model_copy.model, True, False)
-        elif tiling == "y_only":
-            make_circular_asymm(model_copy.model, False, True)
-        else:
-            make_circular_asymm(model_copy.model, False, False)
-        return (model_copy,)
-
-class VideoGrid:
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "vae": ("VAE",),
-                "tiling": (["enable", "x_only", "y_only", "disable"],),
-                "copy_vae": (["Make a copy", "Modify in place"],),
+                "video1": ("VHS_VIDEOINFO",),
+                "video2": ("VHS_VIDEOINFO",),
+                "video3": ("VHS_VIDEOINFO",),
+                "video4": ("VHS_VIDEOINFO",),
+                "video5": ("VHS_VIDEOINFO",),
+                "video6": ("VHS_VIDEOINFO",),
+                "video7": ("VHS_VIDEOINFO",),
+                "video8": ("VHS_VIDEOINFO",),
+                "video9": ("VHS_VIDEOINFO",),
             }
         }
 
-    RETURN_TYPES = ("VAE",)
-    FUNCTION = "run"
-    CATEGORY = "latent"
+    RETURN_TYPES = ("VHS_FILENAMES",)
+    RETURN_NAMES = ("combined_video",)
+    CATEGORY = "custom_video"
+    FUNCTION = "combine_grid"
 
-    def run(self, vae, tiling, copy_vae):
-        if copy_vae == "Modify in place":
-            vae_copy = vae
-        else:
-            vae_copy = copy.deepcopy(vae)
-        
-        if tiling == "enable":
-            make_circular_asymm(vae_copy.first_stage_model, True, True)
-        elif tiling == "x_only":
-            make_circular_asymm(vae_copy.first_stage_model, True, False)
-        elif tiling == "y_only":
-            make_circular_asymm(vae_copy.first_stage_model, False, True)
-        else:
-            make_circular_asymm(vae_copy.first_stage_model, False, False)
-        
-        return (vae_copy,)
+    def combine_grid(self, video1, video2, video3, video4, video5, video6, video7, video8, video9):
+        # Collect the nine video info dictionaries into a list.
+        videos = [video1, video2, video3, video4, video5, video6, video7, video8, video9]
+        input_paths = []
+        for idx, vid in enumerate(videos):
+            # Try to get a valid path; prefer "loaded_path" over "source_path".
+            path = vid.get("loaded_path") or vid.get("source_path")
+            if path is None:
+                raise Exception(f"Input video {idx+1} does not contain a valid file path.")
+            input_paths.append(path)
 
+        # Determine output directory and construct an output filename.
+        output_dir = folder_paths.get_output_directory()
+        base_name = "grid_video"
+        output_path = os.path.join(output_dir, f"{base_name}.mp4")
 
-class TileFusion:
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "model": ("MODEL",),
-                "tiling": (["enable", "x_only", "y_only", "disable"],),
-                "copy_model": (["Make a copy", "Modify in place"],),
-            },
-        }
+        # Build the ffmpeg command:
+        #  - Add each input video.
+        #  - Reset timestamps for each stream using setpts=PTS-STARTPTS.
+        #  - Horizontally stack every three videos into a row.
+        #  - Vertically stack the three rows into a 3x3 grid.
+        cmd = ["ffmpeg", "-y"]
+        for path in input_paths:
+            cmd.extend(["-i", path])
 
-    CATEGORY = "conditioning"
+        filter_complex = (
+            "[0:v] setpts=PTS-STARTPTS [v0]; "
+            "[1:v] setpts=PTS-STARTPTS [v1]; "
+            "[2:v] setpts=PTS-STARTPTS [v2]; "
+            "[3:v] setpts=PTS-STARTPTS [v3]; "
+            "[4:v] setpts=PTS-STARTPTS [v4]; "
+            "[5:v] setpts=PTS-STARTPTS [v5]; "
+            "[6:v] setpts=PTS-STARTPTS [v6]; "
+            "[7:v] setpts=PTS-STARTPTS [v7]; "
+            "[8:v] setpts=PTS-STARTPTS [v8]; "
+            "[v0][v1][v2] hstack=inputs=3 [row0]; "
+            "[v3][v4][v5] hstack=inputs=3 [row1]; "
+            "[v6][v7][v8] hstack=inputs=3 [row2]; "
+            "[row0][row1][row2] vstack=inputs=3 [grid]"
+        )
 
-    RETURN_TYPES = ("MODEL",)
-    FUNCTION = "run"
+        cmd.extend([
+            "-filter_complex", filter_complex,
+            "-map", "[grid]",
+            "-c:v", "libx264",
+            "-crf", "23",
+            "-preset", "veryfast",
+            output_path
+        ])
 
-    def run(self, model, copy_model, tiling):
-        if copy_model == "Modify in place":
-            model_copy = model
-        else:
-            model_copy = copy.deepcopy(model)
-            
-        if tiling == "enable":
-            make_circular_asymm(model_copy.model, True, True)
-        elif tiling == "x_only":
-            make_circular_asymm(model_copy.model, True, False)
-        elif tiling == "y_only":
-            make_circular_asymm(model_copy.model, False, True)
-        else:
-            make_circular_asymm(model_copy.model, False, False)
-        return (model_copy,)
+        # Run the ffmpeg command.
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            raise Exception("ffmpeg failed:\n" + e.stderr.decode() if e.stderr else str(e))
 
-
-# asymmetric tiling from https://github.com/tjm35/asymmetric-tiling-sd-webui/blob/main/scripts/asymmetric_tiling.py
-def make_circular_asymm(model, tileX: bool, tileY: bool):
-    for layer in [
-        layer for layer in model.modules() if isinstance(layer, torch.nn.Conv2d)
-    ]:
-        layer.padding_modeX = 'circular' if tileX else 'constant'
-        layer.padding_modeY = 'circular' if tileY else 'constant'
-        layer.paddingX = (layer._reversed_padding_repeated_twice[0], layer._reversed_padding_repeated_twice[1], 0, 0)
-        layer.paddingY = (0, 0, layer._reversed_padding_repeated_twice[2], layer._reversed_padding_repeated_twice[3])
-        layer._conv_forward = __replacementConv2DConvForward.__get__(layer, Conv2d)
-    return model
-
-
-def __replacementConv2DConvForward(self, input: Tensor, weight: Tensor, bias: Optional[Tensor]):
-    working = F.pad(input, self.paddingX, mode=self.padding_modeX)
-    working = F.pad(working, self.paddingY, mode=self.padding_modeY)
-    return F.conv2d(working, weight, bias, self.stride, _pair(0), self.dilation, self.groups)
-
-
-class CircularVAEDecode:
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "samples": ("LATENT",),
-                "vae": ("VAE",),
-                "tiling": (["enable", "x_only", "y_only", "disable"],)
-            }
-        }
-
-    RETURN_TYPES = ("IMAGE",)
-    FUNCTION = "decode"
-
-    CATEGORY = "latent"
-
-    def decode(self, samples, vae, tiling):
-        vae_copy = copy.deepcopy(vae)
-        
-        if tiling == "enable":
-            make_circular_asymm(vae_copy.first_stage_model, True, True)
-        elif tiling == "x_only":
-            make_circular_asymm(vae_copy.first_stage_model, True, False)
-        elif tiling == "y_only":
-            make_circular_asymm(vae_copy.first_stage_model, False, True)
-        else:
-            make_circular_asymm(vae_copy.first_stage_model, False, False)
-        
-        result = (vae_copy.decode(samples["samples"]),)
-        return result
-
-
-class MakeCircularVAE:
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "vae": ("VAE",),
-                "tiling": (["enable", "x_only", "y_only", "disable"],),
-                "copy_vae": (["Make a copy", "Modify in place"],),
-            }
-        }
-
-    RETURN_TYPES = ("VAE",)
-    FUNCTION = "run"
-    CATEGORY = "latent"
-
-    def run(self, vae, tiling, copy_vae):
-        if copy_vae == "Modify in place":
-            vae_copy = vae
-        else:
-            vae_copy = copy.deepcopy(vae)
-        
-        if tiling == "enable":
-            make_circular_asymm(vae_copy.first_stage_model, True, True)
-        elif tiling == "x_only":
-            make_circular_asymm(vae_copy.first_stage_model, True, False)
-        elif tiling == "y_only":
-            make_circular_asymm(vae_copy.first_stage_model, False, True)
-        else:
-            make_circular_asymm(vae_copy.first_stage_model, False, False)
-        
-        return (vae_copy,)
-
-
-class OffsetImage:
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "pixels": ("IMAGE",),
-                "x_percent": (
-                    "FLOAT",
-                    {"default": 50.0, "min": 0.0, "max": 100.0, "step": 1},
-                ),
-                "y_percent": (
-                    "FLOAT",
-                    {"default": 50.0, "min": 0.0, "max": 100.0, "step": 1},
-                ),
-            }
-        }
-
-    RETURN_TYPES = ("IMAGE",)
-    FUNCTION = "run"
-    CATEGORY = "image"
-
-    def run(self, pixels, x_percent, y_percent):
-        n, y, x, c = pixels.size()
-        y = round(y * y_percent / 100)
-        x = round(x * x_percent / 100)
-        return (pixels.roll((y, x), (1, 2)),)
+        # Return output in the expected format (a tuple with a VHS_FILENAMES-like structure).
+        return (("grid_video", [output_path]),)

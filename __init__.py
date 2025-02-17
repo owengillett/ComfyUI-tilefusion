@@ -1,13 +1,13 @@
-from .TileFusion import (RepeatVideo, VideoGrid)
+from .TileFusion import (VideoGridCombine)
 
 NODE_CLASS_MAPPINGS = {
-    "RepeatVideo": RepeatVideo,
-    "VideoGrid": VideoGrid
+    # "RepeatVideo": RepeatVideo,
+    "VideoGrid": VideoGridCombine
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "RepeatVideo": "Repeat Video",
-    "VideoGrid": "Video Grid"
+    # "RepeatVideo": "Repeat Video",
+    "VideoGridCombine": "Video Grid Combine"
 }
 
 __all__ = [NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS]
