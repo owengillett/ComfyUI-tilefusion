@@ -2,7 +2,7 @@ from .TileFusion import (VideoGridCombine)
 
 NODE_CLASS_MAPPINGS = {
     # "RepeatVideo": RepeatVideo,
-    "VideoGrid": VideoGridCombine
+    "VideoGridCombine": VideoGridCombine
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
