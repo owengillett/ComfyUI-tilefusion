@@ -11,7 +11,6 @@ import numpy as np
 from PIL import Image, ExifTags, PngImagePlugin
 
 import folder_paths
-from .logger import logger
 from .utils import floatOrInt, imageOrLatent  # imageOrLatent is used to type image sequences
 from comfy.utils import ProgressBar
 
@@ -75,7 +74,6 @@ class VideoGridCombine:
         except Exception as e:
             raise Exception("One or more inputs are not valid image sequences: " + str(e))
         if min_frames == 0:
-            logger.warn("At least one input sequence is empty. Returning empty sequence.")
             return ([],)
         combined_sequence = []
         pbar = ProgressBar(min_frames)
