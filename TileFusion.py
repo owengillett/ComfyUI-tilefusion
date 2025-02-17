@@ -13,7 +13,7 @@ from PIL import Image, ExifTags, PngImagePlugin
 import folder_paths
 from comfy.utils import ProgressBar
 
-# Minimal inlined definitions to replace external utils dependency
+# Minimal inlined definitions to replace external VHS utils dependency
 class MultiInput(str):
     def __new__(cls, string, allowed_types="*"):
         res = super().__new__(cls, string)
@@ -24,15 +24,15 @@ class MultiInput(str):
             return False
         return other not in self.allowed_types
 
+# These types are used in the node interface.
 imageOrLatent = MultiInput("IMAGE", ["IMAGE", "LATENT"])
 floatOrInt = MultiInput("FLOAT", ["FLOAT", "INT"])
 
-# Helper function to convert an image (numpy array or PIL image) to a PIL image
+# Helper: Convert input (PIL image or numpy array) to a PIL image
 def to_pil(im):
     if isinstance(im, Image.Image):
         return im.convert("RGB")
     elif isinstance(im, np.ndarray):
-        # If pixel values are in [0,1], scale to [0,255]
         if im.max() <= 1.0:
             im = (im * 255).astype(np.uint8)
         else:
@@ -41,7 +41,7 @@ def to_pil(im):
     else:
         raise Exception("Unsupported image format: " + str(type(im)))
 
-# Helper function to tile 9 images into a 3x3 grid.
+# Helper: Tile a list of 9 images into a 3x3 grid
 def tile_images(images: List) -> Image.Image:
     if len(images) != 9:
         raise Exception("Expected 9 images to form a 3x3 grid, got " + str(len(images)))
@@ -57,7 +57,7 @@ def tile_images(images: List) -> Image.Image:
 class VideoGridCombine:
     @classmethod
     def INPUT_TYPES(cls):
-        # Expect nine image sequences (lists of images) as input.
+        # Each input is an image sequence (list of images) of type imageOrLatent
         return {
             "required": {
                 "seq1": (imageOrLatent,),
@@ -72,27 +72,27 @@ class VideoGridCombine:
             }
         }
 
-    RETURN_TYPES = ("IMAGE_SEQUENCE",)
+    # The return type is "IMAGE" – in our system this indicates an image sequence.
+    RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("combined_sequence",)
     CATEGORY = "custom"
     FUNCTION = "combine_grid"
 
     def combine_grid(self, seq1, seq2, seq3, seq4, seq5, seq6, seq7, seq8, seq9):
-        # Gather the nine input sequences
+        # Collect the nine input sequences.
         sequences = [seq1, seq2, seq3, seq4, seq5, seq6, seq7, seq8, seq9]
         try:
             min_frames = min(len(seq) for seq in sequences)
         except Exception as e:
             raise Exception("One or more inputs are not valid image sequences: " + str(e))
         if min_frames == 0:
-            print("Warning: At least one input sequence is empty. Returning empty sequence.", file=sys.stderr)
             return ([],)
         combined_sequence = []
         pbar = ProgressBar(min_frames)
-        # Process each frame index (up to the shortest sequence length)
+        # Process frame by frame up to the shortest sequence length.
         for i in range(min_frames):
             try:
-                # Get the i-th frame from each sequence
+                # Retrieve the i-th frame from each sequence.
                 frames = [sequences[j][i] for j in range(9)]
             except Exception as e:
                 raise Exception(f"Error retrieving frame {i} from input sequences: " + str(e))
@@ -100,7 +100,7 @@ class VideoGridCombine:
                 grid_frame = tile_images(frames)
             except Exception as e:
                 raise Exception(f"Error tiling frame {i}: " + str(e))
-            # Convert the composite grid image to a numpy array in float32 format normalized to [0,1]
+            # Convert the grid image to a normalized numpy array.
             grid_np = np.array(grid_frame).astype(np.float32) / 255.0
             combined_sequence.append(grid_np)
             pbar.update(1)
