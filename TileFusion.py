@@ -52,29 +52,30 @@ def to_pil(im):
     else:
         raise Exception("Unsupported image format: " + str(type(im)))
 
-# Helper: Tile 8 images into a 3x3 grid with a blank center.
+# Helper: Tile 8 images into a 3x3 grid with a blank (white) center.
 def tile_images_grid8(images: List, cell_size: int) -> Image.Image:
     if len(images) != 8:
         raise Exception("Expected 8 images, got " + str(len(images)))
     pil_images = [to_pil(im).resize((cell_size, cell_size), Image.Resampling.LANCZOS) for im in images]
     blank = Image.new("RGB", (cell_size, cell_size), (255, 255, 255))
     grid = Image.new("RGB", (3 * cell_size, 3 * cell_size))
+    # Top row.
     grid.paste(pil_images[0], (0, 0))
     grid.paste(pil_images[1], (cell_size, 0))
     grid.paste(pil_images[2], (2 * cell_size, 0))
+    # Middle row.
     grid.paste(pil_images[3], (0, cell_size))
     grid.paste(blank, (cell_size, cell_size))
     grid.paste(pil_images[4], (2 * cell_size, cell_size))
+    # Bottom row.
     grid.paste(pil_images[5], (0, 2 * cell_size))
     grid.paste(pil_images[6], (cell_size, 2 * cell_size))
     grid.paste(pil_images[7], (2 * cell_size, 2 * cell_size))
     return grid
 
 # Helper: Create a mask grid for 8 cells.
-# For each cell, if the cell was originally supplied then the mask cell is black (0);
-# otherwise white (255). The center cell is always white.
+# For each cell, if the cell was originally provided then mask = black (0); otherwise white (255).
 def tile_mask_grid8(provided: List[bool], cell_size: int) -> Image.Image:
-    # Create black and white cells.
     black_cell = Image.new("L", (cell_size, cell_size), 0)
     white_cell = Image.new("L", (cell_size, cell_size), 255)
     cells = [black_cell if flag else white_cell for flag in provided]
@@ -134,8 +135,8 @@ class VideoGridCombine:
             }
         }
 
-    # Outputs: combined image sequence, mask sequence, and tiling string.
-    RETURN_TYPES = ("IMAGE", "IMAGE", "STRING")
+    # Return types: combined image sequence ("IMAGE"), mask sequence ("MASK"), and tiling string.
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("combined_sequence", "mask_sequence", "tiling")
     CATEGORY = "custom"
     FUNCTION = "combine_grid"
@@ -223,7 +224,7 @@ class VideoGridCombine:
         mask_frames = []
         pbar = ProgressBar(min_frames)
         for i in range(min_frames):
-            # For each frame, create a dictionary mapping each position to its i-th frame.
+            # For each frame, build a dict mapping each cell to its i-th frame.
             frame_data = {}
             for pos in ["top_left", "top_middle", "top_right",
                         "middle_left", "middle_right",
@@ -237,16 +238,16 @@ class VideoGridCombine:
                 cell_masks = []
                 for pos in row:
                     if pos == "center":
-                        cell_imgs.append(Image.new("RGB", (cell_size, cell_size), (255, 255, 255)))
+                        cell_imgs.append(Image.new("RGB", (cell_size, cell_size), (255,255,255)))
                         cell_masks.append(Image.new("L", (cell_size, cell_size), 255))
                     else:
-                        # Use the original flag to determine if this cell was provided.
+                        # Use the original flag: if not originally provided, mask is white.
                         if orig.get(pos, False):
                             cell_img = to_pil(frame_data[pos]).resize((cell_size, cell_size), Image.Resampling.LANCZOS)
                             cell_imgs.append(cell_img)
                             cell_masks.append(Image.new("L", (cell_size, cell_size), 0))
                         else:
-                            cell_imgs.append(Image.new("RGB", (cell_size, cell_size), (255, 255, 255)))
+                            cell_imgs.append(Image.new("RGB", (cell_size, cell_size), (255,255,255)))
                             cell_masks.append(Image.new("L", (cell_size, cell_size), 255))
                 row_img = Image.new("RGB", (len(cell_imgs) * cell_size, cell_size))
                 row_mask = Image.new("L", (len(cell_masks) * cell_size, cell_size), 255)
@@ -272,6 +273,35 @@ class VideoGridCombine:
             pbar.update(1)
         combined_tensor = torch.from_numpy(np.stack(combined_frames))
         mask_tensor = torch.from_numpy(np.stack(mask_frames))
+        
+        # Tiling adjustment logic.
+        # For horizontal viability: only inputs in top_middle and bottom_middle are allowed.
+        h_viable = (orig.get("top_middle", False) or orig.get("bottom_middle", False)) and not (
+            orig.get("top_left", False) or orig.get("top_right", False) or 
+            orig.get("middle_left", False) or orig.get("middle_right", False) or 
+            orig.get("bottom_left", False) or orig.get("bottom_right", False)
+        )
+        # For vertical viability: only inputs in middle_left and middle_right are allowed.
+        v_viable = (orig.get("middle_left", False) or orig.get("middle_right", False)) and not (
+            orig.get("top_left", False) or orig.get("bottom_left", False) or 
+            orig.get("top_middle", False) or orig.get("top_right", False) or 
+            orig.get("bottom_middle", False) or orig.get("bottom_right", False)
+        )
+        user_tiling = tiling
+        if user_tiling != "disable":
+            if user_tiling == "enable":
+                if not h_viable and v_viable:
+                    tiling = "y_only"
+                elif not v_viable and h_viable:
+                    tiling = "x_only"
+                elif not h_viable and not v_viable:
+                    tiling = "disable"
+                else:
+                    tiling = "enable"
+            elif user_tiling == "x_only":
+                tiling = "x_only" if h_viable else "disable"
+            elif user_tiling == "y_only":
+                tiling = "y_only" if v_viable else "disable"
         return (combined_tensor, mask_tensor, tiling)
 
 # Helper: Centrally crop an image.
