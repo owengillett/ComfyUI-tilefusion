@@ -8,6 +8,71 @@ from torch.nn import Conv2d
 from torch.nn import functional as F
 from torch.nn.modules.utils import _pair
 
+class RepeatVideo:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "tiling": (["enable", "x_only", "y_only", "disable"],),
+                "copy_model": (["Make a copy", "Modify in place"],),
+            },
+        }
+
+    CATEGORY = "conditioning"
+
+    RETURN_TYPES = ("MODEL",)
+    FUNCTION = "run"
+
+    def run(self, model, copy_model, tiling):
+        if copy_model == "Modify in place":
+            model_copy = model
+        else:
+            model_copy = copy.deepcopy(model)
+            
+        if tiling == "enable":
+            make_circular_asymm(model_copy.model, True, True)
+        elif tiling == "x_only":
+            make_circular_asymm(model_copy.model, True, False)
+        elif tiling == "y_only":
+            make_circular_asymm(model_copy.model, False, True)
+        else:
+            make_circular_asymm(model_copy.model, False, False)
+        return (model_copy,)
+
+class VideoGrid:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "vae": ("VAE",),
+                "tiling": (["enable", "x_only", "y_only", "disable"],),
+                "copy_vae": (["Make a copy", "Modify in place"],),
+            }
+        }
+
+    RETURN_TYPES = ("VAE",)
+    FUNCTION = "run"
+    CATEGORY = "latent"
+
+    def run(self, vae, tiling, copy_vae):
+        if copy_vae == "Modify in place":
+            vae_copy = vae
+        else:
+            vae_copy = copy.deepcopy(vae)
+        
+        if tiling == "enable":
+            make_circular_asymm(vae_copy.first_stage_model, True, True)
+        elif tiling == "x_only":
+            make_circular_asymm(vae_copy.first_stage_model, True, False)
+        elif tiling == "y_only":
+            make_circular_asymm(vae_copy.first_stage_model, False, True)
+        else:
+            make_circular_asymm(vae_copy.first_stage_model, False, False)
+        
+        return (vae_copy,)
+
+
 class TileFusion:
     @classmethod
     def INPUT_TYPES(s):
