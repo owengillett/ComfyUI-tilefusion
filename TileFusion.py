@@ -1,109 +1,90 @@
 import os
-import subprocess
 import copy
-from typing import Optional
+import json
+import re
+import datetime
+from typing import Optional, List
+import itertools
 
-# In this example we use folder_paths to determine output directories.
-# If you already have folder_paths in your ComfyUI environment, it will be used;
-# otherwise, we provide a fallback implementation.
-try:
-    import folder_paths
-except ImportError:
-    class folder_paths:
-        @staticmethod
-        def get_output_directory():
-            return os.getcwd()
-        @staticmethod
-        def get_temp_directory():
-            return os.getcwd()
+import PIL
+from PIL import Image, ExifTags, PngImagePlugin
+import torch
+import numpy as np
+
+# Assume these modules are available in your ComfyUI environment.
+from comfy.utils import ProgressBar
+import folder_paths
+
+# Helper function to tile nine images (assumed to be the same dimensions) into a 3x3 grid.
+def tile_images(image_list):
+    # Convert any numpy arrays to PIL images if needed.
+    imgs = [Image.fromarray(img) if not isinstance(img, Image.Image) else img for img in image_list]
+    # Assume all images have the same size.
+    w, h = imgs[0].size
+    # Create a new blank image with width=3*w and height=3*h.
+    grid_img = Image.new('RGB', (3 * w, 3 * h))
+    # Paste each image into its corresponding position.
+    for idx, im in enumerate(imgs):
+        row = idx // 3
+        col = idx % 3
+        grid_img.paste(im, (col * w, row * h))
+    return grid_img
 
 class VideoGridCombine:
-    """
-    Custom node that accepts nine video inputs (each as a VHS_VIDEOINFO dictionary)
-    and arranges them in a 3x3 grid using ffmpeg’s filter_complex.
-
-    IMPORTANT:
-      - Each VHS_VIDEOINFO is expected to be a dict that includes either a "loaded_path"
-        or "source_path" key with the video file's path.
-      - All input videos should have the same resolution and framerate.
-      - ffmpeg must be installed and available in the system PATH.
-    """
     @classmethod
     def INPUT_TYPES(cls):
+        # Each required input is expected to be a sequence (list) of images.
+        # In ComfyUI VHS the "images" input type is often defined as "imageOrLatent".
+        # Here we explicitly use "IMAGE_SEQUENCE" to indicate a list of images.
         return {
             "required": {
-                "video1": ("VHS_VIDEOINFO",),
-                "video2": ("VHS_VIDEOINFO",),
-                "video3": ("VHS_VIDEOINFO",),
-                "video4": ("VHS_VIDEOINFO",),
-                "video5": ("VHS_VIDEOINFO",),
-                "video6": ("VHS_VIDEOINFO",),
-                "video7": ("VHS_VIDEOINFO",),
-                "video8": ("VHS_VIDEOINFO",),
-                "video9": ("VHS_VIDEOINFO",),
+                "seq1": ("IMAGE_SEQUENCE",),
+                "seq2": ("IMAGE_SEQUENCE",),
+                "seq3": ("IMAGE_SEQUENCE",),
+                "seq4": ("IMAGE_SEQUENCE",),
+                "seq5": ("IMAGE_SEQUENCE",),
+                "seq6": ("IMAGE_SEQUENCE",),
+                "seq7": ("IMAGE_SEQUENCE",),
+                "seq8": ("IMAGE_SEQUENCE",),
+                "seq9": ("IMAGE_SEQUENCE",),
+            },
+            "optional": {
+                # You can add extra parameters if needed (for example, an option to choose PNG or JPEG).
             }
         }
 
-    RETURN_TYPES = ("VHS_FILENAMES",)
-    RETURN_NAMES = ("combined_video",)
-    CATEGORY = "custom_video"
-    FUNCTION = "combine_grid"
+    RETURN_TYPES = ("IMAGE_SEQUENCE",)
+    RETURN_NAMES = ("combined_sequence",)
+    CATEGORY = "custom"  # You can change this to fit your node categorization.
+    FUNCTION = "combine_sequence"
 
-    def combine_grid(self, video1, video2, video3, video4, video5, video6, video7, video8, video9):
-        # Collect the nine video info dictionaries into a list.
-        videos = [video1, video2, video3, video4, video5, video6, video7, video8, video9]
-        input_paths = []
-        for idx, vid in enumerate(videos):
-            # Try to get a valid path; prefer "loaded_path" over "source_path".
-            path = vid.get("loaded_path") or vid.get("source_path")
-            if path is None:
-                raise Exception(f"Input video {idx+1} does not contain a valid file path.")
-            input_paths.append(path)
-
-        # Determine output directory and construct an output filename.
-        output_dir = folder_paths.get_output_directory()
-        base_name = "grid_video"
-        output_path = os.path.join(output_dir, f"{base_name}.mp4")
-
-        # Build the ffmpeg command:
-        #  - Add each input video.
-        #  - Reset timestamps for each stream using setpts=PTS-STARTPTS.
-        #  - Horizontally stack every three videos into a row.
-        #  - Vertically stack the three rows into a 3x3 grid.
-        cmd = ["ffmpeg", "-y"]
-        for path in input_paths:
-            cmd.extend(["-i", path])
-
-        filter_complex = (
-            "[0:v] setpts=PTS-STARTPTS [v0]; "
-            "[1:v] setpts=PTS-STARTPTS [v1]; "
-            "[2:v] setpts=PTS-STARTPTS [v2]; "
-            "[3:v] setpts=PTS-STARTPTS [v3]; "
-            "[4:v] setpts=PTS-STARTPTS [v4]; "
-            "[5:v] setpts=PTS-STARTPTS [v5]; "
-            "[6:v] setpts=PTS-STARTPTS [v6]; "
-            "[7:v] setpts=PTS-STARTPTS [v7]; "
-            "[8:v] setpts=PTS-STARTPTS [v8]; "
-            "[v0][v1][v2] hstack=inputs=3 [row0]; "
-            "[v3][v4][v5] hstack=inputs=3 [row1]; "
-            "[v6][v7][v8] hstack=inputs=3 [row2]; "
-            "[row0][row1][row2] vstack=inputs=3 [grid]"
-        )
-
-        cmd.extend([
-            "-filter_complex", filter_complex,
-            "-map", "[grid]",
-            "-c:v", "libx264",
-            "-crf", "23",
-            "-preset", "veryfast",
-            output_path
-        ])
-
-        # Run the ffmpeg command.
-        try:
-            subprocess.run(cmd, check=True)
-        except subprocess.CalledProcessError as e:
-            raise Exception("ffmpeg failed:\n" + e.stderr.decode() if e.stderr else str(e))
-
-        # Return output in the expected format (a tuple with a VHS_FILENAMES-like structure).
-        return (("grid_video", [output_path]),)
+    def combine_sequence(
+        self,
+        seq1,
+        seq2,
+        seq3,
+        seq4,
+        seq5,
+        seq6,
+        seq7,
+        seq8,
+        seq9,
+        **kwargs
+    ):
+        # Collect the nine input sequences.
+        sequences = [seq1, seq2, seq3, seq4, seq5, seq6, seq7, seq8, seq9]
+        # Determine the minimum number of frames among the inputs.
+        min_len = min(len(seq) for seq in sequences)
+        if min_len == 0:
+            return ([],)
+        combined_sequence = []
+        pbar = ProgressBar(min_len)
+        # For each frame index, pick one image from each sequence and tile them.
+        for i in range(min_len):
+            # Gather the i-th frame from each sequence.
+            frames = [sequences[j][i] for j in range(9)]
+            grid_frame = tile_images(frames)
+            # Convert the combined PIL image back to a numpy array (the typical format in ComfyUI).
+            combined_sequence.append(np.array(grid_frame))
+            pbar.update(1)
+        return (combined_sequence,)
