@@ -27,7 +27,7 @@ class MultiInput(str):
 imageOrLatent = MultiInput("IMAGE", ["IMAGE", "LATENT"])
 floatOrInt = MultiInput("FLOAT", ["FLOAT", "INT"])
 
-# Helper: Convert an input (PIL Image, numpy array, or torch.Tensor) to a PIL Image.
+# Helper: Convert an input (PIL image, numpy array, or torch.Tensor) to a PIL image.
 def to_pil(im):
     if isinstance(im, Image.Image):
         return im.convert("RGB")
@@ -100,7 +100,7 @@ def central_crop(img: Image.Image, crop_max_size: float) -> Image.Image:
     top = (h - new_h) // 2
     return img.crop((left, top, left + new_w, top + new_h))
 
-# Helper: Safely get length of a sequence (list or torch.Tensor).
+# Helper: Safely get the length of a sequence (list or torch.Tensor).
 def seq_length(seq):
     if seq is None:
         return 0
@@ -132,7 +132,7 @@ class VideoGridCombine:
             }
         }
 
-    # Outputs: combined image sequence ("IMAGE"), mask sequence ("MASK"), and tiling string.
+    # Return types: combined image sequence ("IMAGE"), mask sequence ("MASK"), tiling string.
     RETURN_TYPES = ("IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("combined_sequence", "mask_sequence", "tiling")
     CATEGORY = "custom"
@@ -152,7 +152,7 @@ class VideoGridCombine:
         bottom_middle=None,
         bottom_right=None,
     ):
-        # If all inputs are empty, output one frame white grid.
+        # If no inputs are provided at all, output a single white cell.
         if (seq_length(top_left) == 0 and seq_length(top_middle) == 0 and seq_length(top_right) == 0 and
             seq_length(middle_left) == 0 and seq_length(middle_right) == 0 and
             seq_length(bottom_left) == 0 and seq_length(bottom_middle) == 0 and seq_length(bottom_right) == 0):
@@ -174,7 +174,7 @@ class VideoGridCombine:
             "bottom_middle": True if (bottom_middle is not None and seq_length(bottom_middle) > 0) else False,
             "bottom_right": True if (bottom_right is not None and seq_length(bottom_right) > 0) else False,
         }
-        # Build dictionary for optional inputs, replacing None with empty lists.
+        # Build dictionary for inputs, replacing None with empty list.
         seqs = {
             "top_left": top_left if top_left is not None else [],
             "top_middle": top_middle if top_middle is not None else [],
@@ -185,17 +185,18 @@ class VideoGridCombine:
             "bottom_middle": bottom_middle if bottom_middle is not None else [],
             "bottom_right": bottom_right if bottom_right is not None else [],
         }
-        # Update orig: if a sequence is empty, mark as not provided.
+        # Update orig: if a sequence is empty, mark it as not provided.
         for key in seqs:
             if seq_length(seqs[key]) == 0:
                 orig[key] = False
         provided_counts = [seq_length(seq) for seq in seqs.values() if seq_length(seq) > 0]
         min_frames = min(provided_counts) if provided_counts else 1
-        # For each cell, if empty, substitute with a white image sequence.
-        # Create a fresh white image for each frame.
+        # For each cell, if empty, substitute with a freshly allocated white image sequence.
         for key, seq in seqs.items():
             if seq_length(seq) == 0:
-                seqs[key] = [np.array(Image.new("RGB", (cell_size, cell_size), (255, 255, 255))).astype(np.float32)/255.0 for _ in range(min_frames)]
+                white = Image.new("RGB", (cell_size, cell_size), (255, 255, 255))
+                # Use .copy() to ensure a new array each time.
+                seqs[key] = [np.array(white).copy().astype(np.float32)/255.0 for _ in range(min_frames)]
             else:
                 if not isinstance(seq, torch.Tensor):
                     seqs[key] = seq[:min_frames]
@@ -282,7 +283,7 @@ class VideoGridCombine:
         combined_tensor = torch.from_numpy(np.stack(combined_frames))
         mask_tensor = torch.from_numpy(np.stack(mask_frames))
         
-        # Tiling adjustment.
+        # Tiling adjustment logic.
         h_viable = (orig.get("top_middle", False) or orig.get("bottom_middle", False)) and not (
             orig.get("top_left", False) or orig.get("top_right", False) or 
             orig.get("middle_left", False) or orig.get("middle_right", False) or 
