@@ -283,7 +283,7 @@ class VideoGridCombine:
             if crop_max_size > 0:
                 grid_img = central_crop_tensor(grid_img, crop_max_size)
                 grid_mask = central_crop_tensor(grid_mask, crop_max_size)
-            combined_frames.append(grid_img)
+            combined_frames.append(full_img)
             mask_frames.append(grid_mask)
             pbar.update(1)
         # Stack the frames into tensors.
