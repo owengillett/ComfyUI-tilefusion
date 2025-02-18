@@ -65,7 +65,6 @@ def resize_tensor_image(img: torch.Tensor, new_size: int) -> torch.Tensor:
 def build_full_grid_image_tensor(orig: dict, frame_data: dict, cell_size: int) -> torch.Tensor:
     full_h = 3 * cell_size
     full_w = 3 * cell_size
-    # Create a white background (all ones).
     grid = torch.ones((full_h, full_w, 3), dtype=torch.float32)
     
     positions = ["top_left", "top_middle", "top_right",
@@ -75,7 +74,7 @@ def build_full_grid_image_tensor(orig: dict, frame_data: dict, cell_size: int) -
     cells = []
     for pos in positions:
         if orig.get(pos, False):
-            cell_mask = resize_tensor_image(frame_data[pos], cell_size)
+            cell_mask = frame_data[pos]
         else:
             cell_mask = torch.ones((cell_size, cell_size, 3), dtype=torch.float32)
         cells.append(cell_mask)
