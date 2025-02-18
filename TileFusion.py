@@ -36,32 +36,6 @@ def resize_tensor_image(img: torch.Tensor, new_size: int) -> torch.Tensor:
 
 # Helper: Build a full 3x3 grid tensor image from a dictionary of eight cell images.
 # The center cell remains white.
-# def build_full_grid_image_tensor(frame_data: dict, cell_size: int) -> torch.Tensor:
-#     full_h = 3 * cell_size
-#     full_w = 3 * cell_size
-#     # Create a white background (all ones).
-#     grid = torch.ones((full_h, full_w, 3), dtype=torch.float32)
-    
-#     pos_coords = {
-#          "top_left": (0, 0),
-#          "top_middle": (0, cell_size),
-#          "top_right": (0, 2 * cell_size),
-#          "middle_left": (cell_size, 0),
-#          "middle_right": (cell_size, 2 * cell_size),
-#          "bottom_left": (2 * cell_size, 0),
-#          "bottom_middle": (2 * cell_size, cell_size),
-#          "bottom_right": (2 * cell_size, 2 * cell_size),
-#     }
-    
-#     for pos, (y, x) in pos_coords.items():
-#         if pos in frame_data and frame_data[pos] is not None:
-#             # Input is assumed to already be a tensor in H×W×C format.
-#             cell_img = resize_tensor_image(frame_data[pos], cell_size)
-#             grid[y:y+cell_size, x:x+cell_size, :] = cell_img
-#     return grid
-
-# Helper: Build a full 3x3 grid tensor image from a dictionary of eight cell images.
-# The center cell remains white.
 def build_full_grid_image_tensor(orig: dict, frame_data: dict, cell_size: int) -> torch.Tensor:
     full_h = 3 * cell_size
     full_w = 3 * cell_size
@@ -162,14 +136,14 @@ class VideoGridCombine:
                 "tiling": (["enable", "x_only", "y_only", "disable"],),
             },
             "optional": {
-                "top_left": (imageOrLatent, {"default": []}),
-                "top_middle": (imageOrLatent, {"default": []}),
-                "top_right": (imageOrLatent, {"default": []}),
-                "middle_left": (imageOrLatent, {"default": []}),
-                "middle_right": (imageOrLatent, {"default": []}),
-                "bottom_left": (imageOrLatent, {"default": []}),
-                "bottom_middle": (imageOrLatent, {"default": []}),
-                "bottom_right": (imageOrLatent, {"default": []}),
+                "top_left": (imageOrLatent, {"default": None}),
+                "top_middle": (imageOrLatent, {"default": None}),
+                "top_right": (imageOrLatent, {"default": None}),
+                "middle_left": (imageOrLatent, {"default": None}),
+                "middle_right": (imageOrLatent, {"default": None}),
+                "bottom_left": (imageOrLatent, {"default": None}),
+                "bottom_middle": (imageOrLatent, {"default": None}),
+                "bottom_right": (imageOrLatent, {"default": None}),
             }
         }
 
