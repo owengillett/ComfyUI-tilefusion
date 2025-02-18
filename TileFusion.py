@@ -36,28 +36,61 @@ def resize_tensor_image(img: torch.Tensor, new_size: int) -> torch.Tensor:
 
 # Helper: Build a full 3x3 grid tensor image from a dictionary of eight cell images.
 # The center cell remains white.
-def build_full_grid_image_tensor(frame_data: dict, cell_size: int) -> torch.Tensor:
+# def build_full_grid_image_tensor(frame_data: dict, cell_size: int) -> torch.Tensor:
+#     full_h = 3 * cell_size
+#     full_w = 3 * cell_size
+#     # Create a white background (all ones).
+#     grid = torch.ones((full_h, full_w, 3), dtype=torch.float32)
+    
+#     pos_coords = {
+#          "top_left": (0, 0),
+#          "top_middle": (0, cell_size),
+#          "top_right": (0, 2 * cell_size),
+#          "middle_left": (cell_size, 0),
+#          "middle_right": (cell_size, 2 * cell_size),
+#          "bottom_left": (2 * cell_size, 0),
+#          "bottom_middle": (2 * cell_size, cell_size),
+#          "bottom_right": (2 * cell_size, 2 * cell_size),
+#     }
+    
+#     for pos, (y, x) in pos_coords.items():
+#         if pos in frame_data and frame_data[pos] is not None:
+#             # Input is assumed to already be a tensor in H×W×C format.
+#             cell_img = resize_tensor_image(frame_data[pos], cell_size)
+#             grid[y:y+cell_size, x:x+cell_size, :] = cell_img
+#     return grid
+
+# Helper: Build a full 3x3 grid tensor image from a dictionary of eight cell images.
+# The center cell remains white.
+def build_full_grid_image_tensor(orig: dict, frame_data: dict, cell_size: int) -> torch.Tensor:
     full_h = 3 * cell_size
     full_w = 3 * cell_size
     # Create a white background (all ones).
     grid = torch.ones((full_h, full_w, 3), dtype=torch.float32)
     
-    pos_coords = {
-         "top_left": (0, 0),
-         "top_middle": (0, cell_size),
-         "top_right": (0, 2 * cell_size),
-         "middle_left": (cell_size, 0),
-         "middle_right": (cell_size, 2 * cell_size),
-         "bottom_left": (2 * cell_size, 0),
-         "bottom_middle": (2 * cell_size, cell_size),
-         "bottom_right": (2 * cell_size, 2 * cell_size),
-    }
+    positions = ["top_left", "top_middle", "top_right",
+                 "middle_left", "middle_right",
+                 "bottom_left", "bottom_middle", "bottom_right"]
     
-    for pos, (y, x) in pos_coords.items():
-        if pos in frame_data and frame_data[pos] is not None:
-            # Input is assumed to already be a tensor in H×W×C format.
-            cell_img = resize_tensor_image(frame_data[pos], cell_size)
-            grid[y:y+cell_size, x:x+cell_size, :] = cell_img
+    cells = []
+    for pos in positions:
+        if orig.get(pos, False):
+            cell_mask = frame_data[pos]
+        else:
+            cell_mask = torch.ones((cell_size, cell_size), dtype=torch.float32)
+        cells.append(cell_mask)
+    
+    center = torch.ones((cell_size, cell_size), dtype=torch.float32)
+    grid[0:cell_size, 0:cell_size] = cells[0]           # top_left
+    grid[0:cell_size, cell_size:2*cell_size] = cells[1]    # top_middle
+    grid[0:cell_size, 2*cell_size:3*cell_size] = cells[2]  # top_right
+    grid[cell_size:2*cell_size, 0:cell_size] = cells[3]    # middle_left
+    grid[cell_size:2*cell_size, cell_size:2*cell_size] = center  # center forced white
+    grid[cell_size:2*cell_size, 2*cell_size:3*cell_size] = cells[4]  # middle_right
+    grid[2*cell_size:3*cell_size, 0:cell_size] = cells[5]  # bottom_left
+    grid[2*cell_size:3*cell_size, cell_size:2*cell_size] = cells[6]  # bottom_middle
+    grid[2*cell_size:3*cell_size, 2*cell_size:3*cell_size] = cells[7]  # bottom_right
+
     return grid
 
 # Helper: Build a full mask grid for eight cells based on which inputs were provided.
@@ -210,7 +243,8 @@ class VideoGridCombine:
                         "middle_left", "middle_right",
                         "bottom_left", "bottom_middle", "bottom_right"]:
                 frame_data[pos] = seqs[pos][i] if seq_length(seqs[pos]) > 0 else None
-            full_img = build_full_grid_image_tensor(frame_data, cell_size)
+            full_img = build_full_grid_image_tensor(orig, frame_data, cell_size)
+            # full_img = build_full_grid_image_tensor(orig, seqs, cell_size)
             full_mask = build_full_grid_mask_tensor(orig, cell_size)
             
             # Determine which rows and columns are active.
