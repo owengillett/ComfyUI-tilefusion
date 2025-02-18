@@ -27,7 +27,7 @@ class MultiInput(str):
 imageOrLatent = MultiInput("IMAGE", ["IMAGE", "LATENT"])
 floatOrInt = MultiInput("FLOAT", ["FLOAT", "INT"])
 
-# Helper: Convert an input (PIL image, numpy array, or torch.Tensor) to a PIL Image.
+# Helper: Convert an input (PIL Image, numpy array, or torch.Tensor) to a PIL Image.
 def to_pil(im):
     if isinstance(im, Image.Image):
         return im.convert("RGB")
@@ -52,14 +52,10 @@ def to_pil(im):
     else:
         raise Exception("Unsupported image format: " + str(type(im)))
 
-# Helper: Build a full 3x3 grid image from a dictionary of eight cell images.
-# The positions are fixed: top_left, top_middle, top_right, middle_left, middle_right, bottom_left, bottom_middle, bottom_right.
-# The center cell is always white.
+# Helper: Build a full 3x3 grid image from a dictionary of eight cells.
+# This version always creates a white background and pastes only provided cell images.
 def build_full_grid_image(frame_data: dict, cell_size: int) -> Image.Image:
-    # Create a white background image for the full grid (3 x 3 cells).
     grid = Image.new("RGB", (3 * cell_size, 3 * cell_size), (255, 255, 255))
-    
-    # Mapping cell positions to grid coordinates.
     pos_coords = {
          "top_left": (0, 0),
          "top_middle": (cell_size, 0),
@@ -70,41 +66,29 @@ def build_full_grid_image(frame_data: dict, cell_size: int) -> Image.Image:
          "bottom_middle": (cell_size, 2 * cell_size),
          "bottom_right": (2 * cell_size, 2 * cell_size),
     }
-    
-    # For each cell position, if an image is provided, convert and paste it.
     for pos, coord in pos_coords.items():
         if pos in frame_data and frame_data[pos] is not None:
             cell_img = to_pil(frame_data[pos]).resize((cell_size, cell_size), Image.Resampling.LANCZOS)
             grid.paste(cell_img, coord)
-    
     return grid
 
-
-# Helper: Build a full mask grid for eight cells based on original provided flags.
-# For each cell, if originally provided then the mask cell is black (0); otherwise white (255).
-# The center cell is always white.
+# Helper: Build a full grid mask for 8 cells, based on original provided flags.
 def build_full_grid_mask(orig: dict, cell_size: int) -> Image.Image:
-    positions = ["top_left", "top_middle", "top_right",
-                 "middle_left", "middle_right",
-                 "bottom_left", "bottom_middle", "bottom_right"]
-    cells = []
-    for pos in positions:
+    grid = Image.new("L", (3 * cell_size, 3 * cell_size), 255)
+    pos_coords = {
+         "top_left": (0, 0),
+         "top_middle": (cell_size, 0),
+         "top_right": (2 * cell_size, 0),
+         "middle_left": (0, cell_size),
+         "middle_right": (2 * cell_size, cell_size),
+         "bottom_left": (0, 2 * cell_size),
+         "bottom_middle": (cell_size, 2 * cell_size),
+         "bottom_right": (2 * cell_size, 2 * cell_size),
+    }
+    for pos, coord in pos_coords.items():
         if orig.get(pos, False):
             cell_mask = Image.new("L", (cell_size, cell_size), 0)
-        else:
-            cell_mask = Image.new("L", (cell_size, cell_size), 255)
-        cells.append(cell_mask)
-    center = Image.new("L", (cell_size, cell_size), 255)
-    grid = Image.new("L", (3 * cell_size, 3 * cell_size), 255)
-    grid.paste(cells[0], (0, 0))
-    grid.paste(cells[1], (cell_size, 0))
-    grid.paste(cells[2], (2 * cell_size, 0))
-    grid.paste(cells[3], (0, cell_size))
-    grid.paste(center, (cell_size, cell_size))
-    grid.paste(cells[4], (2 * cell_size, cell_size))
-    grid.paste(cells[5], (0, 2 * cell_size))
-    grid.paste(cells[6], (cell_size, 2 * cell_size))
-    grid.paste(cells[7], (2 * cell_size, 2 * cell_size))
+            grid.paste(cell_mask, coord)
     return grid
 
 # Helper: Centrally crop an image if its dimensions exceed crop_max_size.
@@ -129,7 +113,6 @@ def seq_length(seq):
     except Exception:
         return 0
 
-# The main node.
 class VideoGridCombine:
     @classmethod
     def INPUT_TYPES(cls):
@@ -171,7 +154,7 @@ class VideoGridCombine:
         bottom_middle=None,
         bottom_right=None,
     ):
-        # Build original flags from raw inputs.
+        # Build original flags using explicit checks.
         orig = {
             "top_left": True if (top_left is not None and seq_length(top_left) > 0) else False,
             "top_middle": True if (top_middle is not None and seq_length(top_middle) > 0) else False,
@@ -182,7 +165,7 @@ class VideoGridCombine:
             "bottom_middle": True if (bottom_middle is not None and seq_length(bottom_middle) > 0) else False,
             "bottom_right": True if (bottom_right is not None and seq_length(bottom_right) > 0) else False,
         }
-        # Build dictionary for optional inputs.
+        # Build dictionary for optional inputs, replacing None with empty lists.
         seqs = {
             "top_left": top_left if top_left is not None else [],
             "top_middle": top_middle if top_middle is not None else [],
@@ -197,8 +180,14 @@ class VideoGridCombine:
         if provided_counts:
             min_frames = min(provided_counts)
         else:
-            return (torch.tensor([]), torch.tensor([]), tiling)
-        # For each cell, if empty, substitute with a white sequence.
+            # No input provided: create one white frame.
+            white_img = np.ones((cell_size, cell_size, 3), dtype=np.float32)  # white image (normalized)
+            combined_tensor = torch.from_numpy(np.expand_dims(white_img, axis=0))
+            # For mask, create a white mask (all ones) with shape (1, 1, cell_size, cell_size).
+            white_mask = np.ones((cell_size, cell_size), dtype=np.float32)
+            mask_tensor = torch.from_numpy(np.expand_dims(np.expand_dims(white_mask, axis=0), axis=0))
+            return (combined_tensor, mask_tensor, tiling)
+        # For each cell, if empty, substitute with a white image sequence.
         for key, seq in seqs.items():
             if seq_length(seq) == 0:
                 white = Image.new("RGB", (cell_size, cell_size), (255, 255, 255))
@@ -222,29 +211,22 @@ class VideoGridCombine:
             full_img = build_full_grid_image(frame_data, cell_size)
             full_mask = build_full_grid_mask(orig, cell_size)
             # Determine active rows and columns.
-            # Rows: index 0 (top) active if any of top_left, top_middle, top_right is True.
-            # Index 1 (middle) always active.
-            # Index 2 (bottom) active if any of bottom_left, bottom_middle, bottom_right is True.
             active_rows = []
             if orig["top_left"] or orig["top_middle"] or orig["top_right"]:
                 active_rows.append(0)
             active_rows.append(1)
             if orig["bottom_left"] or orig["bottom_middle"] or orig["bottom_right"]:
                 active_rows.append(2)
-            # Columns: index 0 (left) active if any of top_left, middle_left, bottom_left is True.
-            # Index 1 (middle) always active.
-            # Index 2 (right) active if any of top_right, middle_right, bottom_right is True.
             active_cols = []
             if orig["top_left"] or orig["middle_left"] or orig["bottom_left"]:
                 active_cols.append(0)
             active_cols.append(1)
             if orig["top_right"] or orig["middle_right"] or orig["bottom_right"]:
                 active_cols.append(2)
-            # Compute crop box in the full grid image (which is 3*cell_size by 3*cell_size).
             left = min(active_cols) * cell_size
             upper = min(active_rows) * cell_size
-            right = (max(active_cols)+1) * cell_size
-            lower = (max(active_rows)+1) * cell_size
+            right = (max(active_cols) + 1) * cell_size
+            lower = (max(active_rows) + 1) * cell_size
             grid_img = full_img.crop((left, upper, right, lower))
             grid_mask = full_mask.crop((left, upper, right, lower))
             if crop_max_size > 0:
@@ -259,13 +241,11 @@ class VideoGridCombine:
         mask_tensor = torch.from_numpy(np.stack(mask_frames))
         
         # Tiling adjustment logic.
-        # For horizontal viability: only inputs in top_middle and bottom_middle are allowed.
         h_viable = (orig.get("top_middle", False) or orig.get("bottom_middle", False)) and not (
             orig.get("top_left", False) or orig.get("top_right", False) or 
             orig.get("middle_left", False) or orig.get("middle_right", False) or 
             orig.get("bottom_left", False) or orig.get("bottom_right", False)
         )
-        # For vertical viability: only inputs in middle_left and middle_right are allowed.
         v_viable = (orig.get("middle_left", False) or orig.get("middle_right", False)) and not (
             orig.get("top_left", False) or orig.get("bottom_left", False) or 
             orig.get("top_middle", False) or orig.get("top_right", False) or 
