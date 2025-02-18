@@ -74,7 +74,7 @@ def build_full_grid_image_tensor(orig: dict, frame_data: dict, cell_size: int) -
     cells = []
     for pos in positions:
         if orig.get(pos, False):
-            cell_mask = frame_data[pos]
+            cell_mask = resize_tensor_image(frame_data[pos], cell_size)
         else:
             cell_mask = torch.ones((cell_size, cell_size, 3), dtype=torch.float32)
         cells.append(cell_mask)
@@ -241,7 +241,7 @@ class VideoGridCombine:
             for pos in ["top_left", "top_middle", "top_right",
                         "middle_left", "middle_right",
                         "bottom_left", "bottom_middle", "bottom_right"]:
-                frame_data[pos] = seqs[pos][i] if seq_length(seqs[pos]) > 0 else None
+                frame_data[pos] = seqs[pos][i]
             full_img = build_full_grid_image_tensor(orig, frame_data, cell_size)
             # full_img = build_full_grid_image_tensor(orig, seqs, cell_size)
             full_mask = build_full_grid_mask_tensor(orig, cell_size)
