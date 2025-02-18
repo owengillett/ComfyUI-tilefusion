@@ -7,10 +7,9 @@ import itertools
 from typing import List, Optional
 
 import torch
+import torch.nn.functional as F
 import numpy as np
-from PIL import Image, ExifTags, PngImagePlugin
 
-import folder_paths
 from comfy.utils import ProgressBar
 
 # Minimal inlined definitions for node interface types.
@@ -27,96 +26,125 @@ class MultiInput(str):
 imageOrLatent = MultiInput("IMAGE", ["IMAGE", "LATENT"])
 floatOrInt = MultiInput("FLOAT", ["FLOAT", "INT"])
 
-# Helper: Convert an input (PIL image, numpy array, or torch.Tensor) to a PIL Image.
-def to_pil(im):
-    if isinstance(im, Image.Image):
-        return im.convert("RGB")
-    elif isinstance(im, np.ndarray):
-        if im.max() <= 1.0:
-            im = (im * 255).astype(np.uint8)
-        else:
-            im = im.astype(np.uint8)
-        return Image.fromarray(im).convert("RGB")
-    elif isinstance(im, torch.Tensor):
-        im = im.cpu().detach()
+# Helper: Convert an input (numpy array or torch.Tensor) to a tensor image in HxWxC float32 [0,1].
+def to_tensor_image(im):
+    if isinstance(im, torch.Tensor):
+        im = im.detach().cpu()
+        # If a batch is provided, take the first item.
         if im.ndim == 4:
             im = im[0]
+        # If channels are first, move them to last.
         if im.ndim == 3 and im.shape[0] <= 4:
             im = im.permute(1, 2, 0)
-        im = im.numpy()
-        if im.max() <= 1.0:
-            im = (im * 255).astype(np.uint8)
-        else:
-            im = im.astype(np.uint8)
-        return Image.fromarray(im).convert("RGB")
+        im = im.to(torch.float32)
+        # If values are > 1 assume they are in [0,255]
+        if im.max() > 1.0:
+            im = im / 255.0
+        return im
+    elif isinstance(im, np.ndarray):
+        im = torch.from_numpy(im)
+        if im.ndim == 3 and im.shape[0] <= 4:
+            im = im.permute(1, 2, 0)
+        im = im.to(torch.float32)
+        if im.max() > 1.0:
+            im = im / 255.0
+        return im
     else:
         raise Exception("Unsupported image format: " + str(type(im)))
 
-# Helper: Build a full 3x3 grid image from a dictionary of eight cell images.
-# The positions are fixed: top_left, top_middle, top_right, middle_left, middle_right, bottom_left, bottom_middle, bottom_right.
+# Helper: Resize a tensor image (HxWxC) to a new size using bilinear interpolation.
+def resize_tensor_image(img, new_size: int):
+    # Convert from (H, W, C) to (1, C, H, W)
+    img = img.permute(2, 0, 1).unsqueeze(0)
+    img = F.interpolate(img, size=(new_size, new_size), mode='bilinear', align_corners=False)
+    # Back to (H, W, C)
+    img = img.squeeze(0).permute(1, 2, 0)
+    return img
+
+# Helper: Build a full 3x3 grid tensor image from the provided dictionary of eight cell images.
 # The center cell is always white.
-def build_full_grid_image(frame_data: dict, cell_size: int) -> Image.Image:
-    # Create a white background image for the full grid (3 x 3 cells).
-    grid = Image.new("RGB", (3 * cell_size, 3 * cell_size), (255, 255, 255))
+def build_full_grid_image_tensor(frame_data: dict, cell_size: int) -> torch.Tensor:
+    # Create a white background tensor in HxWx3 (values 1.0 represent white).
+    full_h = 3 * cell_size
+    full_w = 3 * cell_size
+    grid = torch.ones((full_h, full_w, 3), dtype=torch.float32)
     
-    # Mapping cell positions to grid coordinates.
+    # Mapping positions to top-left coordinates.
+    # Note: In tensor indexing the first coordinate is y (row) and second is x (column).
     pos_coords = {
          "top_left": (0, 0),
-         "top_middle": (cell_size, 0),
-         "top_right": (2 * cell_size, 0),
-         "middle_left": (0, cell_size),
-         "middle_right": (2 * cell_size, cell_size),
-         "bottom_left": (0, 2 * cell_size),
-         "bottom_middle": (cell_size, 2 * cell_size),
+         "top_middle": (0, cell_size),
+         "top_right": (0, 2 * cell_size),
+         "middle_left": (cell_size, 0),
+         "middle_right": (cell_size, 2 * cell_size),
+         "bottom_left": (2 * cell_size, 0),
+         "bottom_middle": (2 * cell_size, cell_size),
          "bottom_right": (2 * cell_size, 2 * cell_size),
     }
     
-    # For each cell position, if an image is provided, convert and paste it.
-    for pos, coord in pos_coords.items():
+    for pos, (y, x) in pos_coords.items():
         if pos in frame_data and frame_data[pos] is not None:
-            cell_img = to_pil(frame_data[pos]).resize((cell_size, cell_size), Image.Resampling.LANCZOS)
-            grid.paste(cell_img, coord)
-    
+            # Convert input to a tensor image and resize.
+            cell_img = to_tensor_image(frame_data[pos])
+            cell_img = resize_tensor_image(cell_img, cell_size)
+            # Paste cell image into grid.
+            grid[y:y+cell_size, x:x+cell_size, :] = cell_img
     return grid
 
-
 # Helper: Build a full mask grid for eight cells based on original provided flags.
-# For each cell, if originally provided then the mask cell is black (0); otherwise white (255).
+# For each cell that was provided, the corresponding cell is set to 0 (black) else 1 (white).
 # The center cell is always white.
-def build_full_grid_mask(orig: dict, cell_size: int) -> Image.Image:
+def build_full_grid_mask_tensor(orig: dict, cell_size: int) -> torch.Tensor:
+    full_h = 3 * cell_size
+    full_w = 3 * cell_size
+    # Start with a full white mask.
+    grid = torch.ones((full_h, full_w), dtype=torch.float32)
+    
+    # Order of cells (same as used in the original): top_left, top_middle, top_right, middle_left, middle_right, bottom_left, bottom_middle, bottom_right.
+    # We'll build each cell as a constant tensor.
+    cells = []
     positions = ["top_left", "top_middle", "top_right",
                  "middle_left", "middle_right",
                  "bottom_left", "bottom_middle", "bottom_right"]
-    cells = []
     for pos in positions:
         if orig.get(pos, False):
-            cell_mask = Image.new("L", (cell_size, cell_size), 0)
+            # Provided cell: mask black (0)
+            cell_mask = torch.zeros((cell_size, cell_size), dtype=torch.float32)
         else:
-            cell_mask = Image.new("L", (cell_size, cell_size), 255)
+            # Not provided: white (1)
+            cell_mask = torch.ones((cell_size, cell_size), dtype=torch.float32)
         cells.append(cell_mask)
-    center = Image.new("L", (cell_size, cell_size), 255)
-    grid = Image.new("L", (3 * cell_size, 3 * cell_size), 255)
-    grid.paste(cells[0], (0, 0))
-    grid.paste(cells[1], (cell_size, 0))
-    grid.paste(cells[2], (2 * cell_size, 0))
-    grid.paste(cells[3], (0, cell_size))
-    grid.paste(center, (cell_size, cell_size))
-    grid.paste(cells[4], (2 * cell_size, cell_size))
-    grid.paste(cells[5], (0, 2 * cell_size))
-    grid.paste(cells[6], (cell_size, 2 * cell_size))
-    grid.paste(cells[7], (2 * cell_size, 2 * cell_size))
+    
+    # The center cell is forced white.
+    center = torch.ones((cell_size, cell_size), dtype=torch.float32)
+    # Paste the cells into the grid. (Coordinates are given as (y, x))
+    grid[0:cell_size, 0:cell_size] = cells[0]           # top_left
+    grid[0:cell_size, cell_size:2*cell_size] = cells[1]    # top_middle
+    grid[0:cell_size, 2*cell_size:3*cell_size] = cells[2]  # top_right
+    grid[cell_size:2*cell_size, 0:cell_size] = cells[3]    # middle_left
+    grid[cell_size:2*cell_size, cell_size:2*cell_size] = center  # center forced white
+    grid[cell_size:2*cell_size, 2*cell_size:3*cell_size] = cells[4]  # middle_right
+    grid[2*cell_size:3*cell_size, 0:cell_size] = cells[5]  # bottom_left
+    grid[2*cell_size:3*cell_size, cell_size:2*cell_size] = cells[6]  # bottom_middle
+    grid[2*cell_size:3*cell_size, 2*cell_size:3*cell_size] = cells[7]  # bottom_right
     return grid
 
-# Helper: Centrally crop an image if its dimensions exceed crop_max_size.
-def central_crop(img: Image.Image, crop_max_size: float) -> Image.Image:
+# Helper: Centrally crop a tensor image (HxWxC or HxW) if its dimensions exceed crop_max_size.
+def central_crop_tensor(img: torch.Tensor, crop_max_size: float) -> torch.Tensor:
     if crop_max_size <= 0:
         return img
-    w, h = img.size
-    new_w = min(w, int(crop_max_size))
+    if img.ndim == 3:
+        h, w, _ = img.shape
+    else:
+        h, w = img.shape
     new_h = min(h, int(crop_max_size))
-    left = (w - new_w) // 2
+    new_w = min(w, int(crop_max_size))
     top = (h - new_h) // 2
-    return img.crop((left, top, left + new_w, top + new_h))
+    left = (w - new_w) // 2
+    if img.ndim == 3:
+        return img[top:top+new_h, left:left+new_w, :]
+    else:
+        return img[top:top+new_h, left:left+new_w]
 
 # Helper: Safely get the length of a sequence (list or torch.Tensor).
 def seq_length(seq):
@@ -199,15 +227,15 @@ class VideoGridCombine:
         else:
             # All sequences are null: Return a white image sequence of length 16 and a white mask sequence of length 16.
             min_frames = 16
-            white_full = Image.new("RGB", (3 * cell_size, 3 * cell_size), (255, 255, 255))
-            white_mask_full = Image.new("L", (3 * cell_size, 3 * cell_size), 255)
+            full_h = 3 * cell_size
+            full_w = 3 * cell_size
+            white_full = torch.ones((full_h, full_w, 3), dtype=torch.float32)
+            white_mask_full = torch.ones((full_h, full_w), dtype=torch.float32)
             if crop_max_size > 0:
-                white_full = central_crop(white_full, crop_max_size)
-                white_mask_full = central_crop(white_mask_full, crop_max_size)
-            white_np = np.array(white_full).astype(np.float32) / 255.0
-            white_mask_np = np.array(white_mask_full).astype(np.float32) / 255.0
-            combined_tensor = torch.from_numpy(np.stack([white_np] * 16))
-            mask_tensor = torch.from_numpy(np.stack([white_mask_np] * 16))
+                white_full = central_crop_tensor(white_full, crop_max_size)
+                white_mask_full = central_crop_tensor(white_mask_full, crop_max_size)
+            combined_tensor = white_full.unsqueeze(0).repeat(16, 1, 1, 1)
+            mask_tensor = white_mask_full.unsqueeze(0).repeat(16, 1, 1)
             return (combined_tensor, mask_tensor, tiling)
             
         combined_frames = []
@@ -221,44 +249,46 @@ class VideoGridCombine:
                         "bottom_left", "bottom_middle", "bottom_right"]:
                 frame_data[pos] = seqs[pos][i] if seq_length(seqs[pos]) > 0 else None
             # Build full grid image and full grid mask.
-            full_img = build_full_grid_image(frame_data, cell_size)
-            full_mask = build_full_grid_mask(orig, cell_size)
+            full_img = build_full_grid_image_tensor(frame_data, cell_size)
+            full_mask = build_full_grid_mask_tensor(orig, cell_size)
             # Determine active rows and columns.
-            # Rows: index 0 (top) active if any of top_left, top_middle, top_right is True.
+            # For rows: index 0 (top) active if any of top_left, top_middle, top_right is provided.
             # Index 1 (middle) always active.
-            # Index 2 (bottom) active if any of bottom_left, bottom_middle, bottom_right is True.
+            # Index 2 (bottom) active if any of bottom_left, bottom_middle, bottom_right is provided.
             active_rows = []
             if orig["top_left"] or orig["top_middle"] or orig["top_right"]:
                 active_rows.append(0)
             active_rows.append(1)
             if orig["bottom_left"] or orig["bottom_middle"] or orig["bottom_right"]:
                 active_rows.append(2)
-            # Columns: index 0 (left) active if any of top_left, middle_left, bottom_left is True.
+            # For columns: index 0 (left) active if any of top_left, middle_left, bottom_left is provided.
             # Index 1 (middle) always active.
-            # Index 2 (right) active if any of top_right, middle_right, bottom_right is True.
+            # Index 2 (right) active if any of top_right, middle_right, bottom_right is provided.
             active_cols = []
             if orig["top_left"] or orig["middle_left"] or orig["bottom_left"]:
                 active_cols.append(0)
             active_cols.append(1)
             if orig["top_right"] or orig["middle_right"] or orig["bottom_right"]:
                 active_cols.append(2)
-            # Compute crop box in the full grid image (which is 3*cell_size by 3*cell_size).
-            left = min(active_cols) * cell_size
-            upper = min(active_rows) * cell_size
-            right = (max(active_cols)+1) * cell_size
-            lower = (max(active_rows)+1) * cell_size
-            grid_img = full_img.crop((left, upper, right, lower))
-            grid_mask = full_mask.crop((left, upper, right, lower))
+            # Compute crop box in the full grid image (grid shape is 3*cell_size x 3*cell_size).
+            top_idx = min(active_rows)
+            left_idx = min(active_cols)
+            bottom_idx = max(active_rows) + 1
+            right_idx = max(active_cols) + 1
+            # Slicing: note that the full image is in (H, W, C) so indices are in multiples of cell_size.
+            grid_img = full_img[top_idx*cell_size : bottom_idx*cell_size,
+                                left_idx*cell_size : right_idx*cell_size, :]
+            grid_mask = full_mask[top_idx*cell_size : bottom_idx*cell_size,
+                                  left_idx*cell_size : right_idx*cell_size]
             if crop_max_size > 0:
-                grid_img = central_crop(grid_img, crop_max_size)
-                grid_mask = central_crop(grid_mask, crop_max_size)
-            grid_np = np.array(grid_img).astype(np.float32) / 255.0
-            mask_np = np.array(grid_mask).astype(np.float32) / 255.0
-            combined_frames.append(grid_np)
-            mask_frames.append(mask_np)
+                grid_img = central_crop_tensor(grid_img, crop_max_size)
+                grid_mask = central_crop_tensor(grid_mask, crop_max_size)
+            combined_frames.append(grid_img)
+            mask_frames.append(grid_mask)
             pbar.update(1)
-        combined_tensor = torch.from_numpy(np.stack(combined_frames))
-        mask_tensor = torch.from_numpy(np.stack(mask_frames))
+        # Stack the frames into tensors.
+        combined_tensor = torch.stack(combined_frames, dim=0)
+        mask_tensor = torch.stack(mask_frames, dim=0)
         
         # Tiling adjustment logic.
         # For horizontal viability: only inputs in top_middle and bottom_middle are allowed.
