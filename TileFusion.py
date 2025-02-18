@@ -197,17 +197,19 @@ class VideoGridCombine:
         if provided_counts:
             min_frames = min(provided_counts)
         else:
-            return (torch.tensor([]), torch.tensor([]), tiling)
-        # # For each cell, if empty, substitute with a white sequence.
-        # for key, seq in seqs.items():
-        #     if seq_length(seq) == 0:
-        #         white = Image.new("RGB", (cell_size, cell_size), (255, 255, 255))
-        #         seqs[key] = [np.array(white).astype(np.float32)/255.0 for _ in range(min_frames)]
-        #     else:
-        #         if not isinstance(seq, torch.Tensor):
-        #             seqs[key] = seq[:min_frames]
-        #         else:
-        #             seqs[key] = seq[:min_frames]
+            # All sequences are null: Return a white image sequence of length 16 and a white mask sequence of length 16.
+            min_frames = 16
+            white_full = Image.new("RGB", (3 * cell_size, 3 * cell_size), (255, 255, 255))
+            white_mask_full = Image.new("L", (3 * cell_size, 3 * cell_size), 255)
+            if crop_max_size > 0:
+                white_full = central_crop(white_full, crop_max_size)
+                white_mask_full = central_crop(white_mask_full, crop_max_size)
+            white_np = np.array(white_full).astype(np.float32) / 255.0
+            white_mask_np = np.array(white_mask_full).astype(np.float32) / 255.0
+            combined_tensor = torch.from_numpy(np.stack([white_np] * 16))
+            mask_tensor = torch.from_numpy(np.stack([white_mask_np] * 16))
+            return (combined_tensor, mask_tensor, tiling)
+            
         combined_frames = []
         mask_frames = []
         pbar = ProgressBar(min_frames)
