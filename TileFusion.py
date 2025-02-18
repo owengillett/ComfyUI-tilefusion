@@ -56,28 +56,29 @@ def to_pil(im):
 # The positions are fixed: top_left, top_middle, top_right, middle_left, middle_right, bottom_left, bottom_middle, bottom_right.
 # The center cell is always white.
 def build_full_grid_image(frame_data: dict, cell_size: int) -> Image.Image:
-    positions = ["top_left", "top_middle", "top_right",
-                 "middle_left", "middle_right",
-                 "bottom_left", "bottom_middle", "bottom_right"]
-    cells = []
-    for pos in positions:
-        if frame_data.get(pos) is not None:
+    # Create a white background image for the full grid (3 x 3 cells).
+    grid = Image.new("RGB", (3 * cell_size, 3 * cell_size), (255, 255, 255))
+    
+    # Mapping cell positions to grid coordinates.
+    pos_coords = {
+         "top_left": (0, 0),
+         "top_middle": (cell_size, 0),
+         "top_right": (2 * cell_size, 0),
+         "middle_left": (0, cell_size),
+         "middle_right": (2 * cell_size, cell_size),
+         "bottom_left": (0, 2 * cell_size),
+         "bottom_middle": (cell_size, 2 * cell_size),
+         "bottom_right": (2 * cell_size, 2 * cell_size),
+    }
+    
+    # For each cell position, if an image is provided, convert and paste it.
+    for pos, coord in pos_coords.items():
+        if pos in frame_data and frame_data[pos] is not None:
             cell_img = to_pil(frame_data[pos]).resize((cell_size, cell_size), Image.Resampling.LANCZOS)
-        else:
-            cell_img = Image.new("RGB", (cell_size, cell_size), (255, 255, 255))
-        cells.append(cell_img)
-    blank = Image.new("RGB", (cell_size, cell_size), (255, 255, 255))
-    grid = Image.new("RGB", (3 * cell_size, 3 * cell_size))
-    grid.paste(cells[0], (0, 0))
-    grid.paste(cells[1], (cell_size, 0))
-    grid.paste(cells[2], (2 * cell_size, 0))
-    grid.paste(cells[3], (0, cell_size))
-    grid.paste(blank, (cell_size, cell_size))
-    grid.paste(cells[4], (2 * cell_size, cell_size))
-    grid.paste(cells[5], (0, 2 * cell_size))
-    grid.paste(cells[6], (cell_size, 2 * cell_size))
-    grid.paste(cells[7], (2 * cell_size, 2 * cell_size))
+            grid.paste(cell_img, coord)
+    
     return grid
+
 
 # Helper: Build a full mask grid for eight cells based on original provided flags.
 # For each cell, if originally provided then the mask cell is black (0); otherwise white (255).
