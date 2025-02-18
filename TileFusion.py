@@ -198,16 +198,16 @@ class VideoGridCombine:
             min_frames = min(provided_counts)
         else:
             return (torch.tensor([]), torch.tensor([]), tiling)
-        # For each cell, if empty, substitute with a white sequence.
-        for key, seq in seqs.items():
-            if seq_length(seq) == 0:
-                white = Image.new("RGB", (cell_size, cell_size), (255, 255, 255))
-                seqs[key] = [np.array(white).astype(np.float32)/255.0 for _ in range(min_frames)]
-            else:
-                if not isinstance(seq, torch.Tensor):
-                    seqs[key] = seq[:min_frames]
-                else:
-                    seqs[key] = seq[:min_frames]
+        # # For each cell, if empty, substitute with a white sequence.
+        # for key, seq in seqs.items():
+        #     if seq_length(seq) == 0:
+        #         white = Image.new("RGB", (cell_size, cell_size), (255, 255, 255))
+        #         seqs[key] = [np.array(white).astype(np.float32)/255.0 for _ in range(min_frames)]
+        #     else:
+        #         if not isinstance(seq, torch.Tensor):
+        #             seqs[key] = seq[:min_frames]
+        #         else:
+        #             seqs[key] = seq[:min_frames]
         combined_frames = []
         mask_frames = []
         pbar = ProgressBar(min_frames)
@@ -287,14 +287,3 @@ class VideoGridCombine:
             elif user_tiling == "y_only":
                 tiling = "y_only" if v_viable else "disable"
         return (combined_tensor, mask_tensor, tiling)
-
-# Helper: Centrally crop an image.
-def central_crop(img: Image.Image, crop_max_size: float) -> Image.Image:
-    if crop_max_size <= 0:
-        return img
-    w, h = img.size
-    new_w = min(w, int(crop_max_size))
-    new_h = min(h, int(crop_max_size))
-    left = (w - new_w) // 2
-    top = (h - new_h) // 2
-    return img.crop((left, top, left + new_w, top + new_h))
