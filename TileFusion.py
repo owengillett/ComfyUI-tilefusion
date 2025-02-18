@@ -205,17 +205,17 @@ class VideoGridCombine:
         }
         # Build a dictionary of sequences.
         seqs = {
-            "top_left": top_left if top_left is not None else [],
-            "top_middle": top_middle if top_middle is not None else [],
-            "top_right": top_right if top_right is not None else [],
-            "middle_left": middle_left if middle_left is not None else [],
-            "middle_right": middle_right if middle_right is not None else [],
-            "bottom_left": bottom_left if bottom_left is not None else [],
-            "bottom_middle": bottom_middle if bottom_middle is not None else [],
-            "bottom_right": bottom_right if bottom_right is not None else [],
+            "top_left": top_left,
+            "top_middle": top_middle,
+            "top_right": top_right,
+            "middle_left": middle_left,
+            "middle_right": middle_right,
+            "bottom_left": bottom_left,
+            "bottom_middle": bottom_middle,
+            "bottom_right": bottom_right,
         }
         
-        provided_counts = [seq_length(seq) for seq in seqs.values() if seq_length(seq) > 0]
+        provided_counts = [seq_length(seq) for seq in seqs.values() if seq is not None]
         if provided_counts:
             min_frames = min(provided_counts)
         else:
@@ -241,7 +241,7 @@ class VideoGridCombine:
             for pos in ["top_left", "top_middle", "top_right",
                         "middle_left", "middle_right",
                         "bottom_left", "bottom_middle", "bottom_right"]:
-                frame_data[pos] = seqs[pos][i]
+                frame_data[pos] = seqs[pos][i] if seq_length(seqs[pos]) > i else None
             full_img = build_full_grid_image_tensor(orig, frame_data, cell_size)
             # full_img = build_full_grid_image_tensor(orig, seqs, cell_size)
             full_mask = build_full_grid_mask_tensor(orig, cell_size)
