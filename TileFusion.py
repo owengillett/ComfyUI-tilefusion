@@ -75,7 +75,7 @@ def build_full_grid_image_tensor(orig: dict, frame_data: dict, cell_size: int) -
     cells = []
     for pos in positions:
         if orig.get(pos, False):
-            cell_mask = frame_data[pos]
+            cell_mask = resize_tensor_image(frame_data[pos], cell_size)
         else:
             cell_mask = torch.ones((cell_size, cell_size), dtype=torch.float32)
         cells.append(cell_mask)
