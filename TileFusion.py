@@ -137,12 +137,13 @@ class VideoGridCombine:
             "bottom_middle": bottom_middle if bottom_middle is not None else [],
             "bottom_right": bottom_right if bottom_right is not None else [],
         }
-        provided_counts = [seq_length(seq) for seq in seqs.values()]
-        min_frames = min(provided_counts)
+        provided_counts = [seq_length(seq) for seq in seqs.values() if seq_length(seq) > 0]
 
-        if min_frames == 0:
+        if provided_counts:
+            min_frames = min(provided_counts)
+        else:
             return (torch.tensor([]), torch.tensor([]), tiling)
-
+            
         # For each cell, if empty, substitute with a white image sequence.
         for key, seq in seqs.items():
             if seq_length(seq) == 0:
