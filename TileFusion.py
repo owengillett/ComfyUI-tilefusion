@@ -8,7 +8,6 @@ from typing import List, Optional
 
 import torch
 import torch.nn.functional as F
-import numpy as np
 
 from comfy.utils import ProgressBar
 
@@ -24,7 +23,6 @@ class MultiInput(str):
         return other not in self.allowed_types
 
 imageOrLatent = MultiInput("IMAGE", ["IMAGE", "LATENT"])
-floatOrInt = MultiInput("FLOAT", ["FLOAT", "INT"])
 
 # Helper: Resize a tensor image (assumed to be in H×W×C) to a square image of size new_size using bilinear interpolation.
 def resize_tensor_image(img: torch.Tensor, new_size: int) -> torch.Tensor:
@@ -147,8 +145,9 @@ class VideoGridCombine:
             }
         }
 
-    RETURN_TYPES = ("IMAGE", "MASK", "STRING")
-    RETURN_NAMES = ("combined_sequence", "mask_sequence", "tiling")
+    # Updated return types: now includes a BOOL for use_inpaint.
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING", "BOOL")
+    RETURN_NAMES = ("combined_sequence", "mask_sequence", "tiling", "use_inpaint")
     CATEGORY = "custom"
     FUNCTION = "combine_grid"
 
@@ -177,6 +176,10 @@ class VideoGridCombine:
             "bottom_middle": True if (bottom_middle is not None and seq_length(bottom_middle) > 0) else False,
             "bottom_right": True if (bottom_right is not None and seq_length(bottom_right) > 0) else False,
         }
+        
+        # Determine if we have any actual image input.
+        use_inpaint = any(orig.values())
+        
         # Build a dictionary of sequences.
         seqs = {
             "top_left": top_left,
@@ -204,7 +207,8 @@ class VideoGridCombine:
                 white_mask_full = central_crop_tensor(white_mask_full, crop_max_size)
             combined_tensor = white_full.unsqueeze(0).repeat(16, 1, 1, 1)
             mask_tensor = white_mask_full.unsqueeze(0).repeat(16, 1, 1)
-            return (combined_tensor, mask_tensor, tiling)
+            # When no image input is provided, use_inpaint is False.
+            return (combined_tensor, mask_tensor, tiling, False)
         
         combined_frames = []
         mask_frames = []
@@ -217,7 +221,6 @@ class VideoGridCombine:
                         "bottom_left", "bottom_middle", "bottom_right"]:
                 frame_data[pos] = seqs[pos][i] if seq_length(seqs[pos]) > i else None
             full_img = build_full_grid_image_tensor(orig, frame_data, cell_size)
-            # full_img = build_full_grid_image_tensor(orig, seqs, cell_size)
             full_mask = build_full_grid_mask_tensor(orig, cell_size)
             
             # Determine which rows and columns are active.
@@ -281,4 +284,4 @@ class VideoGridCombine:
             elif user_tiling == "y_only":
                 tiling = "y_only" if v_viable else "disable"
         
-        return (combined_tensor, mask_tensor, tiling)
+        return (combined_tensor, mask_tensor, tiling, use_inpaint)
