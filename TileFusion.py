@@ -145,8 +145,8 @@ class VideoGridCombine:
             }
         }
 
-    # Updated return types: now includes a BOOL for use_inpaint.
-    RETURN_TYPES = ("IMAGE", "MASK", "STRING", "BOOL")
+    # Updated return types: now includes a BOOLEAN for use_inpaint.
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING", "BOOLEAN")
     RETURN_NAMES = ("combined_sequence", "mask_sequence", "tiling", "use_inpaint")
     CATEGORY = "custom"
     FUNCTION = "combine_grid"
