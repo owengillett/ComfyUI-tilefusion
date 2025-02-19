@@ -194,9 +194,7 @@ class VideoGridCombine:
         }
         
         provided_counts = [seq_length(seq) for seq in seqs.values() if seq is not None]
-        if provided_counts:
-            min_frames = min(provided_counts)
-        else:
+        if not provided_counts:
             # If no sequences provided, create a white grid image sequence.
             min_frames = 16
             full_h = 3 * cell_size
@@ -209,9 +207,56 @@ class VideoGridCombine:
             combined_tensor = white_full.unsqueeze(0).repeat(16, 1, 1, 1)
             mask_tensor = white_mask_full.unsqueeze(0).repeat(16, 1, 1)
             # When no image input is provided, use_inpaint is False.
-            # Set default crop coordinates (0,0) for a full white image.
+            # Default crop coordinates (0,0) for a full white image.
             return (combined_tensor, mask_tensor, tiling, False, 0, 0, cell_size)
         
+        min_frames = min(provided_counts)
+        
+        # Determine the active rows and columns (the center row/column is always active).
+        active_rows = []
+        if orig["top_left"] or orig["top_middle"] or orig["top_right"]:
+            active_rows.append(0)
+        active_rows.append(1)
+        if orig["bottom_left"] or orig["bottom_middle"] or orig["bottom_right"]:
+            active_rows.append(2)
+        
+        active_cols = []
+        if orig["top_left"] or orig["middle_left"] or orig["bottom_left"]:
+            active_cols.append(0)
+        active_cols.append(1)
+        if orig["top_right"] or orig["middle_right"] or orig["bottom_right"]:
+            active_cols.append(2)
+        
+        top_idx = min(active_rows)
+        left_idx = min(active_cols)
+        bottom_idx = max(active_rows) + 1
+        right_idx = max(active_cols) + 1
+
+        # Compute the dimensions of the extracted region from the full grid.
+        extracted_height = (bottom_idx - top_idx) * cell_size
+        extracted_width = (right_idx - left_idx) * cell_size
+        
+        # Determine final dimensions and offsets from central cropping.
+        if crop_max_size > 0:
+            final_height = min(extracted_height, int(crop_max_size))
+            final_width = min(extracted_width, int(crop_max_size))
+            crop_offset_y = (extracted_height - final_height) // 2
+            crop_offset_x = (extracted_width - final_width) // 2
+        else:
+            final_height = extracted_height
+            final_width = extracted_width
+            crop_offset_y = 0
+            crop_offset_x = 0
+
+        # Compute the coordinates of the center cell relative to the extracted region.
+        # The center cell in the full grid is always at grid coordinates (1,1).
+        center_cell_x_extracted = (1 - left_idx) * cell_size
+        center_cell_y_extracted = (1 - top_idx) * cell_size
+
+        # Adjust these coordinates to be relative to the final output (after central cropping).
+        crop_x = center_cell_x_extracted - crop_offset_x
+        crop_y = center_cell_y_extracted - crop_offset_y
+
         combined_frames = []
         mask_frames = []
         pbar = ProgressBar(min_frames)
@@ -225,34 +270,22 @@ class VideoGridCombine:
             full_img = build_full_grid_image_tensor(orig, frame_data, cell_size)
             full_mask = build_full_grid_mask_tensor(orig, cell_size)
             
-            # Determine which rows and columns are active.
-            active_rows = []
-            if orig["top_left"] or orig["top_middle"] or orig["top_right"]:
-                active_rows.append(0)
-            active_rows.append(1)
-            if orig["bottom_left"] or orig["bottom_middle"] or orig["bottom_right"]:
-                active_rows.append(2)
-            active_cols = []
-            if orig["top_left"] or orig["middle_left"] or orig["bottom_left"]:
-                active_cols.append(0)
-            active_cols.append(1)
-            if orig["top_right"] or orig["middle_right"] or orig["bottom_right"]:
-                active_cols.append(2)
+            # Extract the active grid region.
+            grid_img_extracted = full_img[top_idx*cell_size : bottom_idx*cell_size,
+                                          left_idx*cell_size : right_idx*cell_size, :]
+            grid_mask_extracted = full_mask[top_idx*cell_size : bottom_idx*cell_size,
+                                            left_idx*cell_size : right_idx*cell_size]
             
-            top_idx = min(active_rows)
-            left_idx = min(active_cols)
-            bottom_idx = max(active_rows) + 1
-            right_idx = max(active_cols) + 1
-            
-            # The cropped grid (which might not be at the absolute center of the full grid).
-            grid_img = full_img[top_idx*cell_size : bottom_idx*cell_size,
-                                left_idx*cell_size : right_idx*cell_size, :]
-            grid_mask = full_mask[top_idx*cell_size : bottom_idx*cell_size,
-                                  left_idx*cell_size : right_idx*cell_size]
+            # Apply central cropping to the extracted region.
             if crop_max_size > 0:
-                grid_img = central_crop_tensor(grid_img, crop_max_size)
-                grid_mask = central_crop_tensor(grid_mask, crop_max_size)
-            
+                grid_img = grid_img_extracted[crop_offset_y : crop_offset_y + final_height,
+                                              crop_offset_x : crop_offset_x + final_width, :]
+                grid_mask = grid_mask_extracted[crop_offset_y : crop_offset_y + final_height,
+                                                crop_offset_x : crop_offset_x + final_width]
+            else:
+                grid_img = grid_img_extracted
+                grid_mask = grid_mask_extracted
+
             combined_frames.append(grid_img)
             mask_frames.append(grid_mask)
             pbar.update(1)
@@ -287,8 +320,4 @@ class VideoGridCombine:
             elif user_tiling == "y_only":
                 tiling = "y_only" if v_viable else "disable"
         
-        # Calculate crop_x and crop_y as the top-left corner of the crop rectangle.
-        crop_x = left_idx * cell_size
-        crop_y = top_idx * cell_size
-        
-        return (combined_tensor, mask_tensor, tiling, use_inpaint, crop_x, crop_y, cell_size)
+        return (combined_tensor, mask_tensor, tiling, use_inpaint, int(crop_x), int(crop_y), cell_size)
