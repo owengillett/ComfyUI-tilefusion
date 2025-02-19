@@ -145,9 +145,10 @@ class VideoGridCombine:
             }
         }
 
-    # Updated return types: now includes a BOOLEAN for use_inpaint.
-    RETURN_TYPES = ("IMAGE", "MASK", "STRING", "BOOLEAN")
-    RETURN_NAMES = ("combined_sequence", "mask_sequence", "tiling", "use_inpaint")
+    # Updated return types: now includes BOOLEAN for use_inpaint,
+    # and three INT outputs for crop_x, crop_y, and cell_size.
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING", "BOOLEAN", "INT", "INT", "INT")
+    RETURN_NAMES = ("combined_sequence", "mask_sequence", "tiling", "use_inpaint", "crop_x", "crop_y", "cell_size")
     CATEGORY = "custom"
     FUNCTION = "combine_grid"
 
@@ -208,7 +209,8 @@ class VideoGridCombine:
             combined_tensor = white_full.unsqueeze(0).repeat(16, 1, 1, 1)
             mask_tensor = white_mask_full.unsqueeze(0).repeat(16, 1, 1)
             # When no image input is provided, use_inpaint is False.
-            return (combined_tensor, mask_tensor, tiling, False)
+            # Set default crop coordinates (0,0) for a full white image.
+            return (combined_tensor, mask_tensor, tiling, False, 0, 0, cell_size)
         
         combined_frames = []
         mask_frames = []
@@ -242,6 +244,7 @@ class VideoGridCombine:
             bottom_idx = max(active_rows) + 1
             right_idx = max(active_cols) + 1
             
+            # The cropped grid (which might not be at the absolute center of the full grid).
             grid_img = full_img[top_idx*cell_size : bottom_idx*cell_size,
                                 left_idx*cell_size : right_idx*cell_size, :]
             grid_mask = full_mask[top_idx*cell_size : bottom_idx*cell_size,
@@ -284,4 +287,8 @@ class VideoGridCombine:
             elif user_tiling == "y_only":
                 tiling = "y_only" if v_viable else "disable"
         
-        return (combined_tensor, mask_tensor, tiling, use_inpaint)
+        # Calculate crop_x and crop_y as the top-left corner of the crop rectangle.
+        crop_x = left_idx * cell_size
+        crop_y = top_idx * cell_size
+        
+        return (combined_tensor, mask_tensor, tiling, use_inpaint, crop_x, crop_y, cell_size)
